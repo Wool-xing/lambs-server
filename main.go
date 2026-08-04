@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,6 +27,12 @@ import (
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+var cpuLast struct {
+	sync.Mutex
+	idle  uint64
+	total uint64
 }
 
 // ============================================================
@@ -60,19 +68,21 @@ type Project struct {
 	IconURL     string `json:"icon_url"`
 	Stack       string `json:"stack"`
 	Port        string `json:"port"`
-	DB          string `json:"db"`
+	DB          string `json:"db_type"`
 	DSN         string `json:"dsn"`
-	UserCount   int    `json:"users"`
+	UserCount   int    `json:"users_count"`
 	Status      string `json:"status"`
 	Order       int    `json:"sort_order"`
-	Pinned      bool   `json:"pinned"`
+	Pinned      bool   `json:"is_pinned"`
 	IconCls     string `json:"icon_cls"`
 	BasePath    string `json:"base_path"`
 	BackendURL  string `json:"backend_url"`
 	ServiceName string `json:"service_name"`
-	Tags        string `json:"tags"`
-	OfflineMsg  string `json:"offline_msg"`
-	CreatedAt   string `json:"created_at"`
+	Tags        interface{} `json:"tags"`
+	OfflineMsg  string      `json:"offline_msg"`
+	Features    interface{} `json:"features"`
+	Tabs        interface{} `json:"tabs"`
+	CreatedAt   string      `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }
 
@@ -299,7 +309,7 @@ func handleMe(w http.ResponseWriter, r *http.Request) {
 // ============================================================
 
 func handleListProjects(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), tags::text, COALESCE(offline_msg,''), COALESCE(created_at::text,''), COALESCE(updated_at::text,'') FROM projects ORDER BY is_pinned DESC, sort_order")
+	rows, err := db.Query("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,'') FROM projects ORDER BY is_pinned DESC, sort_order")
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
@@ -308,29 +318,36 @@ func handleListProjects(w http.ResponseWriter, r *http.Request) {
 	projects := []Project{}
 	for rows.Next() {
 		var p Project
-		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.Tags, &p.OfflineMsg, &p.CreatedAt, &p.UpdatedAt)
-		if p.DSN == "" {
-			p.DSN = "—"
-		}
+		var tagsRaw, featuresRaw, tabsRaw sql.NullString
+		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &p.CreatedAt, &p.UpdatedAt)
+		if p.DSN == "" { p.DSN = "—" }
+		if tagsRaw.Valid { json.Unmarshal([]byte(tagsRaw.String), &p.Tags) }
+		if p.Tags == nil { p.Tags = []interface{}{} }
+		if featuresRaw.Valid { json.Unmarshal([]byte(featuresRaw.String), &p.Features) }
+		if p.Features == nil { p.Features = []interface{}{} }
+		if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
+		if p.Tabs == nil { p.Tabs = []interface{}{} }
 		projects = append(projects, p)
 	}
-	if projects == nil {
-		projects = []Project{}
-	}
-	jsonOK(w, projects)
-}
+	if projects == nil { projects = []Project{} }
+	jsonOK(w, map[string]interface{}{"projects": projects, "total": len(projects)})}
 
 func handleGetProject(w http.ResponseWriter, r *http.Request, id string) {
 	var p Project
-	err := db.QueryRow("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(tags,''), COALESCE(offline_msg,'') FROM projects WHERE id=$1", id).
-		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.Tags, &p.OfflineMsg)
+	var tagsRaw, featuresRaw, tabsRaw sql.NullString
+	err := db.QueryRow("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]') FROM projects WHERE id=$1", id).
+		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw)
 	if err != nil {
 		jsonErr(w, 404, "项目不存在")
 		return
 	}
-	if p.DSN == "" {
-		p.DSN = "—"
-	}
+	if p.DSN == "" { p.DSN = "—" }
+	if tagsRaw.Valid { json.Unmarshal([]byte(tagsRaw.String), &p.Tags) }
+	if p.Tags == nil { p.Tags = []interface{}{} }
+	if featuresRaw.Valid { json.Unmarshal([]byte(featuresRaw.String), &p.Features) }
+	if p.Features == nil { p.Features = []interface{}{} }
+	if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
+	if p.Tabs == nil { p.Tabs = []interface{}{} }
 	jsonOK(w, p)
 }
 
@@ -523,7 +540,7 @@ func handleRefreshAll(w http.ResponseWriter, r *http.Request) {
 // ============================================================
 
 func handleListUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, username, name, email, role, status, COALESCE(project_access,''), COALESCE(last_login::text,'') FROM users ORDER BY created_at DESC")
+	rows, err := db.Query("SELECT id, username, name, email, role, status, COALESCE(project_access::text,'[]'), COALESCE(last_login::text,'') FROM users ORDER BY created_at DESC")
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
@@ -532,13 +549,15 @@ func handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users := []User{}
 	for rows.Next() {
 		var u User
-		rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &u.ProjectAccess, &u.LastLogin)
+		var pa string
+		rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &pa, &u.LastLogin)
+		u.ProjectAccess = pa
 		users = append(users, u)
 	}
 	if users == nil {
 		users = []User{}
 	}
-	jsonOK(w, users)
+	jsonOK(w, map[string]interface{}{"users": users, "total": len(users)})
 }
 
 func handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -806,6 +825,79 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
+	// CPU via /proc/stat
+	cpu := 0.0
+	if data, err := os.ReadFile("/proc/stat"); err == nil {
+		fields := strings.Fields(strings.Split(string(data), "\n")[0])
+		if len(fields) >= 8 {
+			vals := make([]uint64, 7)
+			for i := 0; i < 7; i++ {
+				vals[i], _ = strconv.ParseUint(fields[i+1], 10, 64)
+			}
+			idle := vals[3] + vals[4]
+			total := vals[0] + vals[1] + vals[2] + vals[3] + vals[4] + vals[5] + vals[6]
+			cpuLast.Lock()
+			if cpuLast.total > 0 {
+				deltaTotal := total - cpuLast.total
+				deltaIdle := idle - cpuLast.idle
+				if deltaTotal > 0 {
+					cpu = float64(deltaTotal-deltaIdle) / float64(deltaTotal) * 100
+				}
+			}
+			cpuLast.idle = idle
+			cpuLast.total = total
+			cpuLast.Unlock()
+		}
+	}
+
+	// Memory via /proc/meminfo
+	var memTotal, memAvail int
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "MemTotal:") {
+				f := strings.Fields(line)
+				if len(f) > 1 { memTotal, _ = strconv.Atoi(f[1]) }
+			}
+			if strings.HasPrefix(line, "MemAvailable:") {
+				f := strings.Fields(line)
+				if len(f) > 1 { memAvail, _ = strconv.Atoi(f[1]) }
+			}
+		}
+	}
+	memTotalMB := memTotal / 1024
+	memUsedMB := (memTotal - memAvail) / 1024
+
+	// Disk via statfs
+	var diskUsed, diskTotal float64
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs("/", &stat); err == nil {
+		diskTotal = float64(stat.Blocks*uint64(stat.Bsize)) / (1024 * 1024 * 1024)
+		diskFree := float64(stat.Bavail*uint64(stat.Bsize)) / (1024 * 1024 * 1024)
+		diskUsed = diskTotal - diskFree
+	}
+
+	// Uptime
+	var uptimeSec int
+	if data, err := os.ReadFile("/proc/uptime"); err == nil {
+		f := strings.Fields(string(data))
+		if len(f) > 0 {
+			if u, err := strconv.ParseFloat(f[0], 64); err == nil {
+				uptimeSec = int(u)
+			}
+		}
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"cpu_percent":     float64(int(cpu*10)) / 10,
+		"memory_used_mb":  memUsedMB,
+		"memory_total_mb": memTotalMB,
+		"disk_used_gb":    float64(int(diskUsed*10)) / 10,
+		"disk_total_gb":   float64(int(diskTotal*10)) / 10,
+		"uptime_seconds":  uptimeSec,
+	})
+}
+
 // ============================================================
 // Notifications
 // ============================================================
@@ -885,12 +977,12 @@ func syncNginx() {
 	}
 
 	conf := buildNginxConfig(projects)
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "ubuntu@$WOOL_IP",
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "ubuntu@100.126.18.126",
 		fmt.Sprintf("sudo tee /etc/nginx/sites-available/lambs-managed.conf > /dev/null"))
 	cmd.Stdin = bytes.NewReader([]byte(conf))
 	cmd.Run()
 
-	cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "ubuntu@$WOOL_IP",
+	cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "ubuntu@100.126.18.126",
 		"sudo nginx -t && sudo systemctl reload nginx")
 	cmd.Run()
 }
@@ -900,18 +992,18 @@ func buildNginxConfig(projects []Project) string {
 	for _, p := range projects {
 		backend := p.BackendURL
 		if backend == "" {
-			backend = fmt.Sprintf("http://%s:3501", lambsIP)
+			backend = "http://100.92.91.11:3501"
 		}
 		lines = append(lines, fmt.Sprintf(`
 # %s — Lambs managed
 location = /%s/favicon.svg {
-    proxy_pass " + lambsIP + ":3602/api/gate/project-logo?path=/%s;
+    proxy_pass http://100.92.91.11:3602/api/gate/project-logo?path=/%s;
     proxy_set_header Host $host;
     expires 1h;
 }
 location = /lambs-gate-%s {
     internal;
-    proxy_pass " + lambsIP + ":3602/api/gate/check-internal?path=/%s;
+    proxy_pass http://100.92.91.11:3602/api/gate/check-internal?path=/%s;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header Host $host;
@@ -1035,172 +1127,82 @@ func extractID2(path, prefix, suffix string) (string, string) {
 	return "", ""
 }
 
-
-	var lambsIP = os.Getenv("LAMBS_IP")
-	if lambsIP == "" { lambsIP = "100.92.91.11" }
-	var woolIP = os.Getenv("WOOL_IP")
-	if woolIP == "" { woolIP = "100.126.18.126" }
-
+// ============================================================
+// Main
+// ============================================================
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	lambsIP := os.Getenv("LAMBS_IP")
-	if lambsIP == "" { lambsIP = "100.92.91.11" }
-	woolIP := os.Getenv("WOOL_IP")
-	if woolIP == "" { woolIP = "100.126.18.126" }
-	_ = lambsIP
-	_ = woolIP
-
 	cfgPath := os.Getenv("LAMBS_CONFIG_PATH")
 	if cfgPath == "" { cfgPath = "/home/ubuntu/apps/lambs-server/lambs_config.json" }
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		json.Unmarshal(data, &lambsConfig)
-	}
+	if data, err := os.ReadFile(cfgPath); err == nil { json.Unmarshal(data, &lambsConfig) }
 	jwtKey = []byte(os.Getenv("JWT_SECRET"))
 	if len(jwtKey) == 0 { jwtKey = []byte(lambsConfig.JWTSecret) }
 	if len(jwtKey) == 0 { log.Fatal("JWT_SECRET not set") }
-	}
-	jwtKey = []byte(os.Getenv("JWT_SECRET"))
-	if len(jwtKey) == 0 { jwtKey = []byte(lambsConfig.JWTSecret) }
-	if len(jwtKey) == 0 { log.Fatal("JWT_SECRET not set") }
-	initDB()
-	defer db.Close()
+
+	initDB(); defer db.Close()
 
 	mux := http.NewServeMux()
 
-	// === Public Routes ===
 	mux.HandleFunc("POST /api/auth/login", corsMiddleware(handleLogin))
 	mux.HandleFunc("GET /api/health", corsMiddleware(handleHealth))
-	mux.HandleFunc("GET /api/system/health", corsMiddleware(handleHealth))
 	mux.HandleFunc("GET /api/gate/check-internal", corsMiddleware(handleGateCheckInternal))
 	mux.HandleFunc("GET /api/gate/offline-page", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>维护中</title><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0B0E13;color:#8B93A3;font-family:sans-serif}div{text-align:center}h1{color:#FFA13B}</style></head><body><div><h1>🔐 系统维护中</h1><p>该项目正在维护，请稍后再试</p></div></body></html>`))
+		w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Offline</title><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0B0E13;color:#8B93A3;font-family:sans-serif}div{text-align:center}h1{color:#FFA13B}</style></head><body><div><h1>Maintenance</h1><p>Project offline.</p></div></body></html>`))
 	}))
 	mux.HandleFunc("GET /api/gate/project-logo", corsMiddleware(handleGateProjectLogo))
-	mux.HandleFunc("POST /api/auth/register", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		jsonErr(w, 400, "注册功能暂未开放")
-	}))
+	mux.HandleFunc("POST /api/auth/register", corsMiddleware(func(w http.ResponseWriter, r *http.Request) { jsonErr(w, 400, "Registration not available") }))
 
-	// === Auth Required ===
 	a := func(h http.HandlerFunc) http.HandlerFunc { return corsMiddleware(authMiddleware(h)) }
 	sa := func(h http.HandlerFunc) http.HandlerFunc { return corsMiddleware(requireSuperAdmin(h)) }
 
-	// Auth
 	mux.HandleFunc("GET /api/auth/me", a(handleMe))
 	mux.HandleFunc("GET /api/me", a(handleMe))
-
-	// Projects
 	mux.HandleFunc("GET /api/projects", a(handleListProjects))
 	mux.HandleFunc("GET /api/projects/stats", a(handleProjectStats))
-	mux.HandleFunc("GET /api/projects/{id}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleGetProject(w, r, r.PathValue("id"))
-	}))
+	mux.HandleFunc("GET /api/projects/{id}", a(func(w http.ResponseWriter, r *http.Request) { handleGetProject(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/projects", a(handleCreateProject))
-	mux.HandleFunc("PUT /api/projects/{id}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleUpdateProject(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("DELETE /api/projects/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteProject(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("PATCH /api/projects/{id}/status", a(func(w http.ResponseWriter, r *http.Request) {
-		handlePatchProjectStatus(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("PATCH /api/projects/{id}/pin", a(func(w http.ResponseWriter, r *http.Request) {
-		handlePinProject(w, r, r.PathValue("id"))
-	}))
+	mux.HandleFunc("PUT /api/projects/{id}", a(func(w http.ResponseWriter, r *http.Request) { handleUpdateProject(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("DELETE /api/projects/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handleDeleteProject(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("PATCH /api/projects/{id}/status", a(func(w http.ResponseWriter, r *http.Request) { handlePatchProjectStatus(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("PATCH /api/projects/{id}/pin", a(func(w http.ResponseWriter, r *http.Request) { handlePinProject(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("PATCH /api/projects/reorder", a(handleReorderProjects))
-	mux.HandleFunc("POST /api/projects/{id}/test-connection", a(func(w http.ResponseWriter, r *http.Request) {
-		handleTestConnection(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("POST /api/projects/{id}/sync", a(func(w http.ResponseWriter, r *http.Request) {
-		handleSyncProject(w, r, r.PathValue("id"))
-	}))
+	mux.HandleFunc("POST /api/projects/{id}/test-connection", a(func(w http.ResponseWriter, r *http.Request) { handleTestConnection(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("POST /api/projects/{id}/sync", a(func(w http.ResponseWriter, r *http.Request) { handleSyncProject(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/projects/refresh-all", a(handleRefreshAll))
-	mux.HandleFunc("GET /api/projects/{id}/logs", a(func(w http.ResponseWriter, r *http.Request) {
-		handleProjectLogs(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("GET /api/projects/{id}/tables", a(func(w http.ResponseWriter, r *http.Request) {
-		handleProjectTables(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("GET /api/projects/{id}/members", a(func(w http.ResponseWriter, r *http.Request) {
-		handleProjectMembers(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("POST /api/projects/{id}/members", a(func(w http.ResponseWriter, r *http.Request) {
-		handleAddMember(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("DELETE /api/projects/{id}/members/{uid}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleRemoveMember(w, r, r.PathValue("id"), r.PathValue("uid"))
-	}))
-	mux.HandleFunc("POST /api/projects/{id}/clone", a(func(w http.ResponseWriter, r *http.Request) {
-		handleCloneProject(w, r, r.PathValue("id"))
-	}))
-
-	// Users
+	mux.HandleFunc("GET /api/projects/{id}/logs", a(func(w http.ResponseWriter, r *http.Request) { handleProjectLogs(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("GET /api/projects/{id}/tables", a(func(w http.ResponseWriter, r *http.Request) { handleProjectTables(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("GET /api/projects/{id}/members", a(func(w http.ResponseWriter, r *http.Request) { handleProjectMembers(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("POST /api/projects/{id}/members", a(func(w http.ResponseWriter, r *http.Request) { handleAddMember(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("DELETE /api/projects/{id}/members/{uid}", a(func(w http.ResponseWriter, r *http.Request) { handleRemoveMember(w, r, r.PathValue("id"), r.PathValue("uid")) }))
+	mux.HandleFunc("POST /api/projects/{id}/clone", a(func(w http.ResponseWriter, r *http.Request) { handleCloneProject(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("GET /api/users", sa(handleListUsers))
 	mux.HandleFunc("POST /api/users", sa(handleCreateUser))
-	mux.HandleFunc("PUT /api/users/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
-		handleUpdateUser(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("DELETE /api/users/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteUser(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("POST /api/users/{id}/reset-password", sa(func(w http.ResponseWriter, r *http.Request) {
-		handleResetPassword(w, r, r.PathValue("id"))
-	}))
-
-	// Gate
+	mux.HandleFunc("PUT /api/users/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handleUpdateUser(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("DELETE /api/users/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handleDeleteUser(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("POST /api/users/{id}/reset-password", sa(func(w http.ResponseWriter, r *http.Request) { handleResetPassword(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("GET /api/gate/check", a(handleGateCheck))
-
-	// Settings
 	mux.HandleFunc("GET /api/settings/config", sa(handleGetConfig))
 	mux.HandleFunc("PUT /api/settings/config", sa(handleUpdateConfig))
 	mux.HandleFunc("GET /api/settings/export/projects", sa(handleExportProjects))
 	mux.HandleFunc("GET /api/settings/export/users", sa(handleExportUsers))
 	mux.HandleFunc("GET /api/settings/audit-logs", sa(handleAuditLogs))
-
-	// Backups
-	mux.HandleFunc("POST /api/backups/{id}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleCreateBackup(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("GET /api/backups/{id}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleListBackups(w, r, r.PathValue("id"))
-	}))
-	mux.HandleFunc("GET /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleDownloadBackup(w, r, r.PathValue("id"), r.PathValue("file"))
-	}))
-	mux.HandleFunc("DELETE /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteBackup(w, r, r.PathValue("id"), r.PathValue("file"))
-	}))
-
-	// Notifications
+	mux.HandleFunc("POST /api/backups/{id}", a(func(w http.ResponseWriter, r *http.Request) { handleCreateBackup(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("GET /api/backups/{id}", a(func(w http.ResponseWriter, r *http.Request) { handleListBackups(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("GET /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) { handleDownloadBackup(w, r, r.PathValue("id"), r.PathValue("file")) }))
+	mux.HandleFunc("DELETE /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) { handleDeleteBackup(w, r, r.PathValue("id"), r.PathValue("file")) }))
 	mux.HandleFunc("GET /api/notifications", a(handleListNotifications))
-	mux.HandleFunc("POST /api/notifications/{nid}/read", a(func(w http.ResponseWriter, r *http.Request) {
-		handleReadNotification(w, r, r.PathValue("nid"))
-	}))
+	mux.HandleFunc("POST /api/notifications/{nid}/read", a(func(w http.ResponseWriter, r *http.Request) { handleReadNotification(w, r, r.PathValue("nid")) }))
 	mux.HandleFunc("POST /api/notifications/read-all", a(handleReadAllNotifications))
-	mux.HandleFunc("DELETE /api/notifications/{nid}", a(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteNotification(w, r, r.PathValue("nid"))
-	}))
+	mux.HandleFunc("DELETE /api/notifications/{nid}", a(func(w http.ResponseWriter, r *http.Request) { handleDeleteNotification(w, r, r.PathValue("nid")) }))
 
-
-	// Catch-all OPTIONS for CORS preflight
-	mux.HandleFunc("OPTIONS /", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-	}))
+	mux.HandleFunc("GET /api/system/health", a(handleSystemHealth))
+	mux.HandleFunc("GET /api/logs/aggregated", a(func(w http.ResponseWriter, r *http.Request) { jsonOK(w, []interface{}{}) }))
 
 	port := lambsConfig.Port
-	if envPort := os.Getenv("PORT"); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil {
-			port = p
-		}
-	}
-	if port == 0 {
-		port = 3602
-	}
-	addr := fmt.Sprintf(":%d", port)
-	log.Printf("Lambs Go Server starting on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	if envPort := os.Getenv("PORT"); envPort != "" { if p, err := strconv.Atoi(envPort); err == nil { port = p } }
+	if port == 0 { port = 3602 }
+	log.Printf("Lambs Go Server on :%d", port)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), mux))
 }
-
