@@ -108,7 +108,20 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mysql"}
 	}
-	return map[string]interface{}{"reachable": false, "error": "不支持的数据源类型，当前支持: postgresql, sqlite, http, mysql"}
+	// MongoDB: TCP health check (no driver needed)
+	if strings.Contains(dsn, "mongodb") {
+		host := "127.0.0.1:27017"
+		if u, err := url.Parse(dsn); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if err != nil {
+			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "mongodb"}
+		}
+		conn.Close()
+		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mongodb"}
+	}
+	return map[string]interface{}{"reachable": false, "error": "不支持的数据源类型，当前支持: postgresql, sqlite, http, mysql, mongodb"}
 }
 
 // SyncUserData fetches user-like rows from a project's datasource.

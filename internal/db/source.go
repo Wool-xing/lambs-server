@@ -46,6 +46,8 @@ func NewDataSource(dsn string) (DataSource, error) {
 		return &SQLiteSource{dsn: dsn}, nil
 	case "mysql":
 		return &MySQLSource{dsn: dsn}, nil
+	case "mongodb", "mongo":
+		return &MongoSource{dsn: dsn}, nil
 	default:
 		return nil, fmt.Errorf("不支持的数据源类型: %s", scheme)
 	}
