@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -92,7 +93,9 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 	// MySQL: TCP health check (no driver needed)
 	if strings.Contains(dsn, "mysql") {
 		host := "127.0.0.1:3306"
-		if idx := strings.Index(dsn, "@tcp("); idx > 0 {
+		if u, err := url.Parse(dsn); err == nil && u.Host != "" {
+			host = u.Host
+		} else if idx := strings.Index(dsn, "@tcp("); idx > 0 {
 			rest := dsn[idx+5:]
 			if end := strings.Index(rest, ")"); end > 0 {
 				host = rest[:end]
