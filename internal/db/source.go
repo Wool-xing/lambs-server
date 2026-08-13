@@ -48,6 +48,8 @@ func NewDataSource(dsn string) (DataSource, error) {
 		return &MySQLSource{dsn: dsn}, nil
 	case "mongodb", "mongo":
 		return &MongoSource{dsn: dsn}, nil
+	case "redis":
+		return &RedisSource{dsn: dsn}, nil
 	default:
 		return nil, fmt.Errorf("不支持的数据源类型: %s", scheme)
 	}

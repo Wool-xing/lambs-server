@@ -121,7 +121,20 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mongodb"}
 	}
-	return map[string]interface{}{"reachable": false, "error": "不支持的数据源类型，当前支持: postgresql, sqlite, http, mysql, mongodb"}
+	// Redis: TCP health check
+	if strings.Contains(dsn, "redis") {
+		host := "127.0.0.1:6379"
+		if u, err := url.Parse(dsn); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if err != nil {
+			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "redis"}
+		}
+		conn.Close()
+		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "redis"}
+	}
+	return map[string]interface{}{"reachable": false, "error": "不支持的数据源类型，当前支持: postgresql, sqlite, http, mysql, mongodb, redis"}
 }
 
 // SyncUserData fetches user-like rows from a project's datasource.
