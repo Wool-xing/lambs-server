@@ -1,0 +1,99 @@
+package handlers
+
+import (
+	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"os"
+	"strconv"
+
+	"lambs-server-go/internal/auth"
+	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/models"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func ListUsers(w http.ResponseWriter, r *http.Request) {
+	search := r.URL.Query().Get("search")
+	roleFilter := r.URL.Query().Get("role")
+	query := "SELECT id, username, name, email, role, status, COALESCE(project_access::text,'[]'), COALESCE(avatar_url::text,''), COALESCE(last_login::text,'') FROM users WHERE 1=1"
+	var args []interface{}
+	argIdx := 0
+	if search != "" { argIdx++; query += " AND (username ILIKE $" + strconv.Itoa(argIdx) + " OR name ILIKE $" + strconv.Itoa(argIdx) + " OR email ILIKE $" + strconv.Itoa(argIdx) + ")"; args = append(args, "%"+search+"%") }
+	if roleFilter != "" && roleFilter != "all" { argIdx++; if roleFilter == "viewer" { query += " AND (role=$" + strconv.Itoa(argIdx) + " OR role IS NULL OR role='')" } else { query += " AND role=$" + strconv.Itoa(argIdx) }; args = append(args, roleFilter) }
+	query += " ORDER BY created_at DESC"
+	rows, err := db.DB.Query(query, args...)
+	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	defer rows.Close()
+	users := []models.User{}
+	for rows.Next() { var u models.User; var pa, av string; rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &pa, &av, &u.LastLogin); u.ProjectAccess = pa; u.AvatarURL = av; users = append(users, u) }
+	if users == nil { users = []models.User{} }
+	var all, super, projAdmin, viewer int
+	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&all)
+	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='super_admin'").Scan(&super)
+	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='project_admin'").Scan(&projAdmin)
+	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='viewer' OR role IS NULL OR role=''").Scan(&viewer)
+	auth.JSONOK(w, map[string]interface{}{"users": users, "counts": map[string]int{"all": all, "super_admin": super, "project_admin": projAdmin, "viewer": viewer}, "total": len(users), "page": 1, "page_size": len(users)})
+}
+
+func CreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username      string `json:"username"`
+		Name          string `json:"name"`
+		Email         string `json:"email"`
+		Role          string `json:"role"`
+		Password      string `json:"password"`
+		ProjectAccess string `json:"project_access"`
+		AvatarURL     string `json:"avatar_url"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	pwd := req.Password
+	if pwd == "" {
+		pwd = os.Getenv("INITIAL_PASSWORD")
+		if pwd == "" {
+			b := make([]byte, 8)
+			crand.Read(b)
+			pwd = hex.EncodeToString(b)
+		}
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte(sha256Hex(pwd)), bcrypt.DefaultCost)
+	u := models.User{Username: req.Username, Name: req.Name, Email: req.Email, Role: req.Role, ProjectAccess: req.ProjectAccess, AvatarURL: req.AvatarURL}
+	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
+	av := u.AvatarURL; if av == "" { av = "null" }
+	err := db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, avatar_url) VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,'active',$6::jsonb,$7) RETURNING id::text",
+		u.Username, u.Name, u.Email, string(hash), u.Role, pa, av).Scan(&u.ID)
+	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
+	auth.JSONCreated(w, u)
+}
+
+func UpdateUser(w http.ResponseWriter, r *http.Request, id string) {
+	var u models.User
+	json.NewDecoder(r.Body).Decode(&u)
+	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
+	av := u.AvatarURL; if av == "" { av = "null" }
+	db.DB.Exec("UPDATE users SET username=$1, name=$2, email=$3, role=$4, status=$5, project_access=$6::jsonb, avatar_url=$7 WHERE id=$8", u.Username, u.Name, u.Email, u.Role, u.Status, pa, av, id)
+	auth.JSONOK(w, map[string]string{"updated": id})
+}
+
+func DeleteUser(w http.ResponseWriter, r *http.Request, id string) {
+	db.DB.Exec("DELETE FROM users WHERE id=$1", id)
+	auth.JSONOK(w, map[string]string{"deleted": id})
+}
+
+func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
+	var req struct{ NewPassword string `json:"new_password"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.NewPassword == "" { auth.JSONErr(w, 400, "请输入新密码"); return }
+	if len(req.NewPassword) < 6 { auth.JSONErr(w, 400, "新密码至少6位"); return }
+	hash, _ := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.NewPassword)), bcrypt.DefaultCost)
+	db.DB.Exec("UPDATE users SET password_hash=$1 WHERE id=$2", string(hash), id)
+	auth.JSONOK(w, map[string]bool{"ok": true})
+}

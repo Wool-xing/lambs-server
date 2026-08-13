@@ -1,0 +1,8 @@
+# 编译产物
+lambs-server
+lambs-server-*
+cmd/tg-bot/tg-bot
+internal/auth/lambs-server
+
+# 缓存
+.ruff_cache/
