@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -74,10 +73,16 @@ func RestoreBackup(w http.ResponseWriter, r *http.Request, id, filename string) 
 	backupPath, err := safeBackupPath(id, filename)
 	if err != nil { auth.JSONErr(w, 404, "备份不存在"); return }
 	if _, err := os.Stat(backupPath); os.IsNotExist(err) { auth.JSONErr(w, 404, "备份文件不存在"); return }
-	src, _ := os.Open(backupPath); defer src.Close()
-	dst, err := os.Create(dsn2)
-	if err != nil { auth.JSONErr(w, 500, "无法写入数据库文件"); return }
-	defer dst.Close(); io.Copy(dst, src)
+	// WAL-safe restore via the sqlite3 backup API — writing the file directly
+	// would orphan -wal/-shm pages and corrupt the live database.
+	escaped := strings.Replace(dsn2, "'", "''", -1)
+	cmd := exec.Command("sqlite3", backupPath, fmt.Sprintf(".backup '%s'", escaped))
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		auth.JSONErr(w, 500, "恢复失败: "+strings.TrimSpace(errBuf.String()))
+		return
+	}
 	auth.JSONOK(w, map[string]string{"restored": filename})
 }
 
