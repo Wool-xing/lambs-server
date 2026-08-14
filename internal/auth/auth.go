@@ -70,6 +70,20 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		userID, _ := mapClaims["user_id"].(string)
 		username, _ := mapClaims["username"].(string)
 		role, _ := mapClaims["role"].(string)
+		// Fresh role/status from the database — role changes and account
+		// deactivation take effect immediately instead of after token expiry.
+		// (db.DB is nil only in unit tests — they exercise the claims path.)
+		var dbRole, dbStatus string
+		if db.DB != nil {
+			if err := db.DB.QueryRow("SELECT role, status FROM users WHERE id=$1", userID).Scan(&dbRole, &dbStatus); err == nil {
+				if dbStatus != "active" {
+					JSONErr(w, 401, "账号已停用")
+					return
+				}
+				role = dbRole
+			}
+		}
+		// On DB errors keep claim values (graceful degradation).
 		r.Header.Set("X-User-ID", userID)
 		r.Header.Set("X-Username", username)
 		r.Header.Set("X-Role", role)
@@ -136,6 +150,8 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.DB.Exec("UPDATE users SET last_login=$1 WHERE id=$2", time.Now().Format(time.RFC3339), user.ID)
+	db.DB.Exec("INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ($1,$2,$3,$4,$5)",
+		user.ID, user.Username, "登录", "Lambs", "登录成功")
 
 	claims := jwt.MapClaims{
 		"user_id":  user.ID,

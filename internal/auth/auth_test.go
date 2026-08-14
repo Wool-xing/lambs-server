@@ -32,6 +32,35 @@ func TestRequireAuthRejectsNonHS256(t *testing.T) {
 	}
 }
 
+func TestRateLimitBlocksAfterMax(t *testing.T) {
+	loginLimiter.hits = make(map[string][]time.Time) // reset state
+	limited := RateLimit(5, time.Minute)
+	called := 0
+	h := limited(func(w http.ResponseWriter, r *http.Request) { called++ })
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest("POST", "/api/auth/login", nil)
+		req.RemoteAddr = "10.0.0.1:1234"
+		h(httptest.NewRecorder(), req)
+	}
+	if called != 5 {
+		t.Fatalf("expected 5 calls allowed, got %d", called)
+	}
+	req := httptest.NewRequest("POST", "/api/auth/login", nil)
+	req.RemoteAddr = "10.0.0.1:1234"
+	rr := httptest.NewRecorder()
+	h(rr, req)
+	if rr.Code != 429 || called != 5 {
+		t.Fatalf("expected 429 on 6th request, got %d called=%d", rr.Code, called)
+	}
+	// Different IP is not affected
+	req2 := httptest.NewRequest("POST", "/api/auth/login", nil)
+	req2.RemoteAddr = "10.0.0.2:1234"
+	h(httptest.NewRecorder(), req2)
+	if called != 6 {
+		t.Fatalf("expected other IP to pass, called=%d", called)
+	}
+}
+
 func TestRequireAuthAcceptsHS256(t *testing.T) {
 	JWTKey = []byte("test-key")
 	claims := jwt.MapClaims{

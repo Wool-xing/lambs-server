@@ -432,6 +432,7 @@ func DeleteProject(w http.ResponseWriter, r *http.Request, id string) {
 	res, err := db.DB.Exec("DELETE FROM projects WHERE id=$1", id)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	if n, _ := res.RowsAffected(); n == 0 { auth.JSONErr(w, 404, "项目不存在"); return }
+	auditLog(r, "删除项目", id, "项目及运行配置已删除")
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"deleted": id})
 }
@@ -684,12 +685,22 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if pkVal == "" {
 		// Empty pkval = insert new row (sources like Qdrant generate their own IDs)
 		if err := src.InsertItem(table, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+		auditLog(r, "新增数据", id, fmt.Sprintf("table=%s", table))
 	} else if err := src.UpdateItem(table, pkCol, pkVal, row); err != nil {
 		auth.JSONErr(w, 500, err.Error())
 		return
+	} else {
+		auditLog(r, "修改数据", id, fmt.Sprintf("table=%s pk=%s=%s", table, pkCol, pkVal))
 	}
 	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONOK(w, map[string]string{"updated": pkVal})
+}
+
+// auditLog records an admin action. Best-effort — audit write failures must
+// never break the operation itself.
+func auditLog(r *http.Request, action, target, detail string) {
+	db.DB.Exec("INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ($1,$2,$3,$4,$5)",
+		r.Header.Get("X-User-ID"), r.Header.Get("X-Username"), action, target, detail)
 }
 
 func DeleteTableRow(w http.ResponseWriter, r *http.Request, id string) {
@@ -708,6 +719,7 @@ func DeleteTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.DeleteItem(table, pkCol, pkVal); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	auditLog(r, "删除数据", id, fmt.Sprintf("table=%s pk=%s=%s", table, pkCol, pkVal))
 	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONOK(w, map[string]string{"deleted": pkVal})
 }
@@ -729,6 +741,7 @@ func InsertTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.InsertItem(table, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	auditLog(r, "新增数据", id, fmt.Sprintf("table=%s", table))
 	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONCreated(w, row)
 }

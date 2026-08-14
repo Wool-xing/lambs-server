@@ -379,17 +379,19 @@ func main() {
 	// ── Routes ──────────────────────────────────────────
 	mux := http.NewServeMux()
 
-	// Public
-	mux.HandleFunc("POST /api/auth/login", auth.CORS(auth.HandleLogin))
+	// Public. Credential endpoints get a second rate-limit layer (nginx
+	// already limits /lambs/api/auth/login) for direct :3602 access.
+	credLimit := auth.RateLimit(5, time.Minute)
+	mux.HandleFunc("POST /api/auth/login", auth.CORS(credLimit(auth.HandleLogin)))
 	mux.HandleFunc("GET /api/health", auth.CORS(handleHealth))
 	mux.HandleFunc("GET /api/gate/check-internal", auth.CORS(gate.HandleCheckInternal))
 	mux.HandleFunc("GET /api/gate/offline-page", auth.CORS(gate.HandleOfflinePage))
 	mux.HandleFunc("GET /api/gate/project-logo", auth.CORS(gate.HandleProjectLogo))
-	mux.HandleFunc("POST /api/auth/register", auth.CORS(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/auth/register", auth.CORS(credLimit(func(w http.ResponseWriter, r *http.Request) {
 		auth.JSONErr(w, 400, "Registration not available")
-	}))
-	mux.HandleFunc("POST /api/auth/forgot-password/request", auth.CORS(auth.HandleForgotRequest))
-	mux.HandleFunc("POST /api/auth/forgot-password/verify", auth.CORS(auth.HandleForgotVerify))
+	})))
+	mux.HandleFunc("POST /api/auth/forgot-password/request", auth.CORS(credLimit(auth.HandleForgotRequest)))
+	mux.HandleFunc("POST /api/auth/forgot-password/verify", auth.CORS(credLimit(auth.HandleForgotVerify)))
 
 	a := auth.WithAuth
 	sa := auth.WithAdmin

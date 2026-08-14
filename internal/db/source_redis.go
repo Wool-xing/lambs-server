@@ -59,12 +59,20 @@ func (s *RedisSource) ListCollections() ([]string, error) {
 		return []string{}, err
 	}
 	defer c.Close()
-	keys, _, err := c.Scan(ctx, 0, "*", 200).Result()
-	if err != nil {
-		return []string{}, err
-	}
-	if keys == nil {
-		keys = []string{}
+	// Full key sweep — a single SCAN call caps at count keys, silently
+	// truncating larger keyspaces. Loop the cursor to completion.
+	keys := []string{}
+	cursor := uint64(0)
+	for {
+		batch, next, err := c.Scan(ctx, cursor, "*", 200).Result()
+		if err != nil {
+			return []string{}, err
+		}
+		keys = append(keys, batch...)
+		if next == 0 {
+			break
+		}
+		cursor = next
 	}
 	return keys, nil
 }

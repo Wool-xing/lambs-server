@@ -6,6 +6,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"lambs-server-go/internal/auth"
@@ -92,12 +93,22 @@ func HandleOfflinePage(w http.ResponseWriter, r *http.Request) {
 		statusLabel = "不可用"
 	}
 
-	// Theme from cookies
+	// Theme from cookies. Values are user-controllable input injected into
+	// CSS — whitelist-safe tokens only, anything else falls back to defaults.
+	safeCSS := regexp.MustCompile(`^[#0-9a-zA-Z(),.%\s\-]+$`)
 	accent, accentBg, border := "#FFA13B", "rgba(255,161,59,.10)", "rgba(255,161,59,.18)"
 	if ac, _ := r.Cookie("lambs_theme_accent"); ac != nil {
 		var a struct{ Accent, AccentBg, Border, Glow string }
 		if dec, err := url.QueryUnescape(ac.Value); err == nil && json.Unmarshal([]byte(dec), &a) == nil && a.Accent != "" {
-			accent, accentBg, border = a.Accent, a.AccentBg, a.Border
+			if safeCSS.MatchString(a.Accent) {
+				accent = a.Accent
+			}
+			if safeCSS.MatchString(a.AccentBg) {
+				accentBg = a.AccentBg
+			}
+			if safeCSS.MatchString(a.Border) {
+				border = a.Border
+			}
 		}
 	}
 	bgGradient := ""
@@ -105,6 +116,9 @@ func HandleOfflinePage(w http.ResponseWriter, r *http.Request) {
 		if dec, err := url.QueryUnescape(gc.Value); err == nil {
 			bgGradient = dec
 		}
+	}
+	if !safeCSS.MatchString(bgGradient) {
+		bgGradient = ""
 	}
 	if bgGradient == "" {
 		bgGradient = "radial-gradient(ellipse at 15% 10%,rgba(0,199,190,.22),transparent 55%),radial-gradient(ellipse at 85% 90%,rgba(255,161,59,.18),transparent 55%),radial-gradient(ellipse at 50% 50%,rgba(184,146,255,.12),transparent 65%),radial-gradient(ellipse at 30% 80%,rgba(56,210,148,.10),transparent 45%)"

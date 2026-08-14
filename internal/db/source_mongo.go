@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -110,6 +111,9 @@ func (s *MongoSource) ReadItems(collection string) ([]map[string]interface{}, []
 	for c := range colSet {
 		cols = append(cols, c)
 	}
+	// Map iteration order is random — sort so column headers stay stable
+	// between refreshes.
+	sort.Strings(cols)
 	if rows == nil {
 		rows = []map[string]interface{}{}
 	}

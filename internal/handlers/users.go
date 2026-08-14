@@ -72,6 +72,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	err := db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, avatar_url) VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,'active',$6::jsonb,$7) RETURNING id::text",
 		u.Username, u.Name, u.Email, string(hash), u.Role, pa, av).Scan(&u.ID)
 	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
+	auditLog(r, "创建用户", u.Username, "role="+u.Role)
 	// Auto-generated password must reach the admin (frontend toasts res.data.password) —
 	// otherwise a user created without one can never log in.
 	type createUserResp struct {
@@ -96,6 +97,7 @@ func UpdateUser(w http.ResponseWriter, r *http.Request, id string) {
 
 func DeleteUser(w http.ResponseWriter, r *http.Request, id string) {
 	db.DB.Exec("DELETE FROM users WHERE id=$1", id)
+	auditLog(r, "删除用户", id, "用户账号已删除")
 	auth.JSONOK(w, map[string]string{"deleted": id})
 }
 
@@ -106,5 +108,6 @@ func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
 	if len(req.NewPassword) < 6 { auth.JSONErr(w, 400, "新密码至少6位"); return }
 	hash, _ := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.NewPassword)), bcrypt.DefaultCost)
 	db.DB.Exec("UPDATE users SET password_hash=$1 WHERE id=$2", string(hash), id)
+	auditLog(r, "重置密码", id, "管理员重置用户密码")
 	auth.JSONOK(w, map[string]bool{"ok": true})
 }
