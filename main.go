@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,13 @@ import (
 
 var lambsConfig models.Config
 
+// cpuState tracks /proc/stat deltas between calls for a real CPU percentage.
+var cpuState = struct {
+	sync.Mutex
+	lastIdle  uint64
+	lastTotal uint64
+}{}
+
 func sha256Hex(s string) string {
 	// Used by handlers via import cycle — defined here as fallback
 	return handlers.SHA256Hex(s)
@@ -35,7 +43,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
-	// CPU
+	// CPU — delta between successive calls (first call returns 0)
 	cpu := 0.0
 	if data, err := os.ReadFile("/proc/stat"); err == nil {
 		fields := strings.Fields(strings.Split(string(data), "\n")[0])
@@ -46,10 +54,14 @@ func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 			}
 			idle := vals[3] + vals[4]
 			total := vals[0] + vals[1] + vals[2] + vals[3] + vals[4] + vals[5] + vals[6]
-			// Simplified CPU — no delta tracking across calls
-			if total > 0 {
-				cpu = float64(total-idle) / float64(total) * 100
+			cpuState.Lock()
+			if cpuState.lastTotal > 0 && total > cpuState.lastTotal {
+				dTotal := total - cpuState.lastTotal
+				dIdle := idle - cpuState.lastIdle
+				cpu = float64(dTotal-dIdle) / float64(dTotal) * 100
 			}
+			cpuState.lastIdle, cpuState.lastTotal = idle, total
+			cpuState.Unlock()
 		}
 	}
 	// Memory
