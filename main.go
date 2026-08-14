@@ -129,7 +129,7 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 			}
 			logs = append(logs, map[string]interface{}{
 				"project_name": uname, "level": "info", "time": l.CreatedAt,
-				"message": fmt.Sprintf("[%s] %s", l.Action, msg),
+				"message": msg,
 			})
 		}
 	}
