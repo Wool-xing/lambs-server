@@ -121,6 +121,10 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 		if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 		if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 		if p.Tabs == nil { p.Tabs = []interface{}{} }
+		// DSN is super_admin-only — mask for all other roles
+		if userRole != "super_admin" {
+			p.DSN = "—"
+		}
 		projects = append(projects, p)
 	}
 	if projects == nil { projects = []models.Project{} }
@@ -156,6 +160,10 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 	if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 	if p.Tabs == nil { p.Tabs = []interface{}{} }
+	// DSN is super_admin-only — mask for all other roles
+	if userRole != "super_admin" {
+		p.DSN = "—"
+	}
 	auth.JSONOK(w, p)
 }
 
@@ -186,6 +194,11 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	body, _ := io.ReadAll(r.Body)
 	var p models.Project
 	if err := json.Unmarshal(body, &p); err != nil { auth.JSONErr(w, 400, "无效数据"); return }
+	// Non-super_admin must never modify dsn — force keep-current.
+	// (Value-based masking check is fragile: payload encoding varies.)
+	if r.Header.Get("X-Role") != "super_admin" {
+		p.DSN = ""
+	}
 	// Detect which backup fields were present in the request
 	var raw map[string]json.RawMessage
 	hasInterval, hasRetention := false, false
