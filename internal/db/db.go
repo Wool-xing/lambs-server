@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -11,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -181,19 +181,47 @@ func SyncUserData(dsn string) []map[string]interface{} {
 			dsn2 = dsn2[:idx]
 		}
 		for _, table := range []string{"users", "user", "accounts", "member"} {
-			cmd := exec.Command("sqlite3", dsn2, fmt.Sprintf("SELECT COUNT(*) FROM %s;", table))
+			if !safeTableName.MatchString(table) {
+				continue
+			}
+			// Real rows via sqlite3 -json, password/token columns excluded
+			var colOut bytes.Buffer
+			colCmd := exec.Command("sqlite3", dsn2, fmt.Sprintf("PRAGMA table_info(%s);", table))
+			colCmd.Stdout = &colOut
+			if err := colCmd.Run(); err != nil || colOut.Len() == 0 {
+				continue
+			}
+			cols := []string{}
+			for _, line := range strings.Split(strings.TrimSpace(colOut.String()), "\n") {
+				parts := strings.Split(line, "|")
+				if len(parts) >= 2 {
+					c := strings.TrimSpace(parts[1])
+					if !strings.Contains(strings.ToLower(c), "password") && !strings.Contains(strings.ToLower(c), "token") {
+						cols = append(cols, c)
+					}
+				}
+			}
+			if len(cols) == 0 {
+				continue
+			}
+			quoted := make([]string, len(cols))
+			for i, c := range cols {
+				quoted[i] = fmt.Sprintf("\"%s\"", c)
+			}
 			var out bytes.Buffer
+			cmd := exec.Command("sqlite3", "-json", dsn2, fmt.Sprintf("SELECT %s FROM %s LIMIT 500;", strings.Join(quoted, ","), table))
 			cmd.Stdout = &out
 			if err := cmd.Run(); err != nil {
 				continue
 			}
-			count, err := strconv.Atoi(strings.TrimSpace(out.String()))
-			if err != nil || count == 0 {
-				continue
+			var result []map[string]interface{}
+			if trimmed := strings.TrimSpace(out.String()); trimmed != "" {
+				if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+					continue
+				}
 			}
-			result := make([]map[string]interface{}, count)
-			for i := 0; i < count; i++ {
-				result[i] = map[string]interface{}{}
+			if len(result) == 0 {
+				continue
 			}
 			return result
 		}
