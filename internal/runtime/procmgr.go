@@ -171,7 +171,7 @@ func (pm *ProcManager) Start(projectID string) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		if lfErr == nil {
 			lf.Close()
@@ -218,11 +218,11 @@ func (pm *ProcManager) Stop(projectID string) error {
 	if lf != nil {
 		lf.Close()
 	}
-	syscall.Kill(-pid, syscall.SIGTERM)
+	killGroup(pid, syscall.SIGTERM)
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		syscall.Kill(-pid, syscall.SIGKILL)
+		killGroup(pid, syscall.SIGKILL)
 		<-done
 	}
 	pm.mu.Lock()
@@ -453,7 +453,7 @@ func (pm *ProcManager) startShared(st *svcState) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		if lf != nil {
 			lf.Close()
@@ -485,11 +485,11 @@ func (pm *ProcManager) stopShared(st *svcState) {
 	if st.cmd != nil && st.cmd.Process != nil {
 		pid := st.cmd.Process.Pid
 		done := st.done
-		syscall.Kill(-pid, syscall.SIGTERM)
+		killGroup(pid, syscall.SIGTERM)
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			syscall.Kill(-pid, syscall.SIGKILL)
+			killGroup(pid, syscall.SIGKILL)
 			<-done
 		}
 	}

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"lambs-server-go/internal/auth"
@@ -87,13 +86,7 @@ func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	memTotalMB := memTotal / 1024
 	memUsedMB := (memTotal - memAvail) / 1024
 	// Disk
-	var diskUsed, diskTotal float64
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs("/", &stat); err == nil {
-		diskTotal = float64(stat.Blocks*uint64(stat.Bsize)) / (1024 * 1024 * 1024)
-		diskFree := float64(stat.Bavail*uint64(stat.Bsize)) / (1024 * 1024 * 1024)
-		diskUsed = diskTotal - diskFree
-	}
+	diskUsed, diskTotal := diskUsageGB()
 	// Uptime
 	var uptimeSec int
 	if data, err := os.ReadFile("/proc/uptime"); err == nil {
@@ -345,6 +338,23 @@ func main() {
 			handlers.RunScheduledBackups()
 		}
 	}()
+	// Retention cleanup: notifications >30d, audit_logs >90d, hourly.
+	go func() {
+		time.Sleep(30 * time.Second)
+		for {
+			if r, err := db.DB.Exec("DELETE FROM notifications WHERE created_at < NOW() - INTERVAL '30 days'"); err == nil {
+				if n, _ := r.RowsAffected(); n > 0 {
+					log.Printf("cleanup: removed %d notifications older than 30 days", n)
+				}
+			}
+			if r, err := db.DB.Exec("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '90 days'"); err == nil {
+				if n, _ := r.RowsAffected(); n > 0 {
+					log.Printf("cleanup: removed %d audit logs older than 90 days", n)
+				}
+			}
+			time.Sleep(1 * time.Hour)
+		}
+	}()
 	// Auto-start online projects on boot
 	go func() {
 		time.Sleep(3 * time.Second)
@@ -409,7 +419,9 @@ func main() {
 	mux.HandleFunc("POST /api/projects/{id}/data/row", a(func(w http.ResponseWriter, r *http.Request) { handlers.InsertTableRow(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("GET /api/projects/{id}/members", a(func(w http.ResponseWriter, r *http.Request) { handlers.ProjectMembers(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/projects/{id}/members", a(func(w http.ResponseWriter, r *http.Request) { handlers.AddMember(w, r, r.PathValue("id")) }))
-	mux.HandleFunc("DELETE /api/projects/{id}/members/{uid}", a(func(w http.ResponseWriter, r *http.Request) { handlers.RemoveMember(w, r, r.PathValue("id"), r.PathValue("uid")) }))
+	mux.HandleFunc("DELETE /api/projects/{id}/members/{uid}", a(func(w http.ResponseWriter, r *http.Request) {
+		handlers.RemoveMember(w, r, r.PathValue("id"), r.PathValue("uid"))
+	}))
 	mux.HandleFunc("POST /api/projects/{id}/clone", sa(func(w http.ResponseWriter, r *http.Request) { handlers.CloneProject(w, r, r.PathValue("id")) }))
 
 	// Users
@@ -434,10 +446,18 @@ func main() {
 	// Backups
 	mux.HandleFunc("POST /api/backups/{id}", a(func(w http.ResponseWriter, r *http.Request) { handlers.CreateBackup(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("GET /api/backups/{id}", a(func(w http.ResponseWriter, r *http.Request) { handlers.ListBackups(w, r, r.PathValue("id")) }))
-	mux.HandleFunc("GET /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) { handlers.DownloadBackup(w, r, r.PathValue("id"), r.PathValue("file")) }))
-	mux.HandleFunc("DELETE /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) { handlers.DeleteBackup(w, r, r.PathValue("id"), r.PathValue("file")) }))
-	mux.HandleFunc("POST /api/backups/{id}/restore/{file}", a(func(w http.ResponseWriter, r *http.Request) { handlers.RestoreBackup(w, r, r.PathValue("id"), r.PathValue("file")) }))
-	mux.HandleFunc("POST /api/backups/{id}/upload-tg/{file}", a(func(w http.ResponseWriter, r *http.Request) { handlers.UploadBackupToTG(w, r, r.PathValue("id"), r.PathValue("file")) }))
+	mux.HandleFunc("GET /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) {
+		handlers.DownloadBackup(w, r, r.PathValue("id"), r.PathValue("file"))
+	}))
+	mux.HandleFunc("DELETE /api/backups/{id}/download/{file}", a(func(w http.ResponseWriter, r *http.Request) {
+		handlers.DeleteBackup(w, r, r.PathValue("id"), r.PathValue("file"))
+	}))
+	mux.HandleFunc("POST /api/backups/{id}/restore/{file}", a(func(w http.ResponseWriter, r *http.Request) {
+		handlers.RestoreBackup(w, r, r.PathValue("id"), r.PathValue("file"))
+	}))
+	mux.HandleFunc("POST /api/backups/{id}/upload-tg/{file}", a(func(w http.ResponseWriter, r *http.Request) {
+		handlers.UploadBackupToTG(w, r, r.PathValue("id"), r.PathValue("file"))
+	}))
 
 	// Notifications
 	mux.HandleFunc("GET /api/notifications", a(handlers.ListNotifications))
@@ -454,11 +474,17 @@ func main() {
 	mux.HandleFunc("GET /api/runtime/local-services", sa(handleLocalServices))
 	mux.HandleFunc("POST /api/runtime/ports/allocate/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
 		port, err := runtime.PortMgr.Allocate(r.PathValue("id"))
-		if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+		if err != nil {
+			auth.JSONErr(w, 500, err.Error())
+			return
+		}
 		auth.JSONOK(w, map[string]interface{}{"project_id": r.PathValue("id"), "port": port})
 	}))
 	mux.HandleFunc("POST /api/runtime/proc/start/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
-		if err := runtime.ProcMgr.Start(r.PathValue("id")); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+		if err := runtime.ProcMgr.Start(r.PathValue("id")); err != nil {
+			auth.JSONErr(w, 500, err.Error())
+			return
+		}
 		auth.JSONOK(w, runtime.ProcMgr.Status(r.PathValue("id")))
 	}))
 	mux.HandleFunc("POST /api/runtime/proc/stop/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
@@ -476,7 +502,10 @@ func main() {
 		auth.JSONOK(w, map[string]interface{}{"processes": runtime.ProcMgr.List(), "count": len(runtime.ProcMgr.List())})
 	}))
 	mux.HandleFunc("POST /api/runtime/proxy/start/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
-		if err := runtime.TCPProxyMgr.Start(r.PathValue("id")); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+		if err := runtime.TCPProxyMgr.Start(r.PathValue("id")); err != nil {
+			auth.JSONErr(w, 500, err.Error())
+			return
+		}
 		auth.JSONOK(w, map[string]string{"proxy": r.PathValue("id"), "status": "started"})
 	}))
 	mux.HandleFunc("POST /api/runtime/proxy/stop/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
