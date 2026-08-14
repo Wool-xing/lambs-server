@@ -423,6 +423,7 @@ func main() {
 		handlers.RemoveMember(w, r, r.PathValue("id"), r.PathValue("uid"))
 	}))
 	mux.HandleFunc("POST /api/projects/{id}/clone", sa(func(w http.ResponseWriter, r *http.Request) { handlers.CloneProject(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("POST /api/projects/{id}/vector-search", a(func(w http.ResponseWriter, r *http.Request) { handlers.VectorSearch(w, r, r.PathValue("id")) }))
 
 	// Users
 	mux.HandleFunc("GET /api/users", sa(handlers.ListUsers))

@@ -552,6 +552,43 @@ func ProjectStats(w http.ResponseWriter, r *http.Request) {
 	auth.JSONOK(w, map[string]int{"total_projects": total, "online": online, "offline": offline, "maintenance": maintenance, "total_users": lambsUsers + projectUsers})
 }
 
+// VectorSearch runs a similarity search on a Qdrant datasource.
+// Body: {ds?, collection, vector: [...], top_k}
+func VectorSearch(w http.ResponseWriter, r *http.Request, id string) {
+	if !CheckProjectView(r, id) { auth.JSONErr(w, 403, "无权限访问该项目"); return }
+	var req struct {
+		DS         string    `json:"ds"`
+		Collection string    `json:"collection"`
+		Vector     []float64 `json:"vector"`
+		TopK       int       `json:"top_k"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		auth.JSONErr(w, 400, "无效请求")
+		return
+	}
+	if req.Collection == "" || len(req.Vector) == 0 {
+		auth.JSONErr(w, 400, "缺少 collection 或 vector")
+		return
+	}
+	var dsn string
+	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, req.DS, dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
+	src, err := db.NewDataSource(dsn)
+	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
+	vs, ok := src.(*db.VectorSource)
+	if !ok {
+		auth.JSONErr(w, 400, "该数据源不支持向量检索")
+		return
+	}
+	hits, err := vs.Search(req.Collection, req.Vector, req.TopK)
+	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	auth.JSONOK(w, map[string]interface{}{"hits": hits, "count": len(hits)})
+}
+
 func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectView(r, id) { auth.JSONErr(w, 403, "无权限访问该项目"); return }
 	var dsn string

@@ -122,6 +122,19 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mongodb"}
 	}
+	// Qdrant: TCP health check
+	if strings.Contains(dsn, "qdrant") {
+		host := "127.0.0.1:6333"
+		if u, err := url.Parse(strings.Replace(dsn, "qdrant://", "http://", 1)); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if err != nil {
+			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "qdrant"}
+		}
+		conn.Close()
+		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "qdrant"}
+	}
 	// Redis: TCP health check
 	if strings.Contains(dsn, "redis") {
 		host := "127.0.0.1:6379"
