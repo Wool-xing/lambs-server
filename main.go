@@ -113,15 +113,23 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 		lines = 20
 	}
 	logs := []map[string]interface{}{}
-	auditRows, _ := db.DB.Query("SELECT id, user_id, action, target, detail, created_at::text FROM audit_logs ORDER BY id DESC LIMIT $1", lines/2)
+	auditRows, _ := db.DB.Query("SELECT id, user_id, user_name, action, target, detail, created_at::text FROM audit_logs ORDER BY id DESC LIMIT $1", lines/2)
 	if auditRows != nil {
 		defer auditRows.Close()
 		for auditRows.Next() {
 			var l models.AuditLog
-			auditRows.Scan(&l.ID, &l.UserID, &l.Action, &l.Target, &l.Detail, &l.CreatedAt)
+			var uname string
+			auditRows.Scan(&l.ID, &l.UserID, &uname, &l.Action, &l.Target, &l.Detail, &l.CreatedAt)
+			if uname == "" {
+				uname = "Lambs"
+			}
+			msg := l.Detail
+			if l.Target != "" && l.Target != uname {
+				msg = l.Target + " — " + l.Detail
+			}
 			logs = append(logs, map[string]interface{}{
-				"project_name": "Lambs", "level": "info",
-				"message": fmt.Sprintf("[%s] %s — %s", l.Action, l.Target, l.Detail),
+				"project_name": uname, "level": "info",
+				"message": fmt.Sprintf("[%s] %s", l.Action, msg),
 			})
 		}
 	}
