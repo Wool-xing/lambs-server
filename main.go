@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,6 +155,69 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 	auth.JSONOK(w, logs)
 }
 
+func handleDetectStartup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo string `json:"repo"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if !regexp.MustCompile(`^[a-zA-Z0-9._-]+$`).MatchString(req.Repo) {
+		auth.JSONErr(w, 400, "仓库名不合法")
+		return
+	}
+	dir := "/home/ubuntu/apps/" + req.Repo
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		auth.JSONOK(w, map[string]interface{}{"exists": false, "candidates": []string{}})
+		return
+	}
+	cands := []string{}
+	if _, err := os.Stat(dir + "/Procfile"); err == nil {
+		if data, err := os.ReadFile(dir + "/Procfile"); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "web:") {
+					cands = append(cands, strings.TrimSpace(strings.TrimPrefix(line, "web:")))
+				}
+			}
+		}
+	}
+	reqTxt := dir + "/requirements.txt"
+	if _, err := os.Stat(reqTxt); err != nil {
+		reqTxt = dir + "/app/requirements.txt"
+	}
+	if _, err := os.Stat(reqTxt); err == nil {
+		appDir := ""
+		app := ""
+		for _, c := range []struct{ p, m string }{
+			{dir + "/app/main.py", dir},
+			{dir + "/main.py", dir},
+			{dir + "/app/app/main.py", dir + "/app"},
+		} {
+			if _, err := os.Stat(c.p); err == nil {
+				appDir = c.m
+				app = c.p
+				break
+			}
+		}
+		if app != "" {
+			cands = append(cands, fmt.Sprintf("cd %s && python3 -m uvicorn app.main:app --host 127.0.0.1 --port PORT", appDir))
+		}
+	}
+	if _, err := os.Stat(dir + "/package.json"); err == nil {
+		cands = append(cands, fmt.Sprintf("cd %s && npm start", dir))
+	}
+	if _, err := os.Stat(dir + "/go.mod"); err == nil {
+		cands = append(cands, fmt.Sprintf("cd %s && go run .", dir))
+	}
+	if _, err := os.Stat(dir + "/Cargo.toml"); err == nil {
+		cands = append(cands, fmt.Sprintf("cd %s && cargo run --release", dir))
+	}
+	if _, err := os.Stat(dir + "/" + req.Repo); err == nil {
+		cands = append(cands, dir+"/"+req.Repo)
+	}
+	auth.JSONOK(w, map[string]interface{}{"exists": true, "candidates": cands})
+}
+
 func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
 	if lines < 1 || lines > 200 {
@@ -255,10 +319,14 @@ func main() {
 			for rows.Next() {
 				var id, port string
 				rows.Scan(&id, &port)
+				runtime.ProcMgr.AttachServices(id)
 				if port != "" {
 					runtime.TCPProxyMgr.Start(id)
 				}
 				runtime.ProcMgr.Start(id)
+				// Stagger boot starts — N online projects starting at once
+				// would spike CPU/memory on a small box.
+				time.Sleep(2 * time.Second)
 			}
 		}
 	}()
@@ -347,6 +415,7 @@ func main() {
 	mux.HandleFunc("GET /api/logs/aggregated", a(handleAggregatedLogs))
 
 	// Runtime API
+	mux.HandleFunc("POST /api/runtime/detect", sa(handleDetectStartup))
 	mux.HandleFunc("POST /api/runtime/ports/allocate/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
 		port, err := runtime.PortMgr.Allocate(r.PathValue("id"))
 		if err != nil { auth.JSONErr(w, 500, err.Error()); return }

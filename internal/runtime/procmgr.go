@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -26,13 +27,26 @@ type cpuSample struct {
 	at    time.Time
 }
 
-type ProcManager struct {
-	mu      sync.RWMutex
-	procs   map[string]*procState
-	samples map[string]cpuSample
+// svcState is a shared service instance with reference counting.
+// Multiple projects referencing the same service name share one instance:
+// it starts on first attach and stops when the last project detaches.
+type svcState struct {
+	name     string
+	startCmd string
+	stopCmd  string
+	refs     map[string]bool // projectID -> true (only online projects count)
+	cmd      *exec.Cmd       // direct-run process (bash -c startCmd)
+	logFile  *os.File
 }
 
-var ProcMgr = &ProcManager{procs: make(map[string]*procState), samples: make(map[string]cpuSample)}
+type ProcManager struct {
+	mu       sync.RWMutex
+	procs    map[string]*procState
+	services map[string]*svcState
+	samples  map[string]cpuSample
+}
+
+var ProcMgr = &ProcManager{procs: make(map[string]*procState), services: make(map[string]*svcState), samples: make(map[string]cpuSample)}
 
 // clockTicks is the kernel jiffies-per-second (usually 100), detected at startup.
 var clockTicks = 100.0
@@ -45,11 +59,37 @@ func init() {
 	}
 }
 
+// memAvailableMB reads MemAvailable from /proc/meminfo, or returns 0 on error.
+func memAvailableMB() (int, error) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemAvailable:") {
+			f := strings.Fields(line)
+			if len(f) > 1 {
+				kb, err := strconv.Atoi(f[1])
+				if err != nil {
+					return 0, err
+				}
+				return kb / 1024, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("MemAvailable not found")
+}
+
 func (pm *ProcManager) Start(projectID string) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	if s, ok := pm.procs[projectID]; ok && s.cmd != nil && s.cmd.Process != nil {
 		return nil
+	}
+	// Memory gate: refuse to start another process when the box is nearly
+	// out of memory — a new process under pressure would OOM the whole host.
+	if avail, err := memAvailableMB(); err == nil && avail < 100 {
+		return fmt.Errorf("可用内存不足（%dMB），拒绝启动以避免拖垮整机", avail)
 	}
 	var svcName, portStr, startCmd string
 	db.DB.QueryRow("SELECT COALESCE(service_name,''), COALESCE(port,''), COALESCE(startup_command,'') FROM projects WHERE id=$1",
@@ -299,6 +339,146 @@ func (pm *ProcManager) List() []map[string]interface{} {
 	return out
 }
 
+// readServices returns the project's declared shared services.
+func readServices(projectID string) []map[string]interface{} {
+	var raw string
+	db.DB.QueryRow("SELECT COALESCE(services::text,'[]') FROM projects WHERE id=$1", projectID).Scan(&raw)
+	var arr []map[string]interface{}
+	json.Unmarshal([]byte(raw), &arr)
+	return arr
+}
+
+// AttachServices increments refcounts for the project's shared services and
+// starts any that transition 0→1. Call on project going online.
+func (pm *ProcManager) AttachServices(projectID string) {
+	for _, s := range readServices(projectID) {
+		name, _ := s["name"].(string)
+		startCmd, _ := s["start_cmd"].(string)
+		stopCmd, _ := s["stop_cmd"].(string)
+		if name == "" || startCmd == "" {
+			continue
+		}
+		pm.mu.Lock()
+		st, ok := pm.services[name]
+		if !ok {
+			st = &svcState{name: name, startCmd: startCmd, stopCmd: stopCmd, refs: make(map[string]bool)}
+			pm.services[name] = st
+		}
+		st.refs[projectID] = true
+		first := len(st.refs) == 1
+		pm.mu.Unlock()
+		if first {
+			if err := pm.startShared(st); err != nil {
+				log.Printf("runtime: shared service %s start failed: %v", name, err)
+				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
+					fmt.Sprintf("n%d", time.Now().UnixNano()), projectID, "alert", "共享服务启动失败", fmt.Sprintf("「%s」启动失败: %v", name, err))
+			}
+		}
+	}
+}
+
+// DetachServices decrements refcounts and stops services that reach 0.
+// Call on project going offline/maintenance or being deleted.
+func (pm *ProcManager) DetachServices(projectID string) {
+	for _, s := range readServices(projectID) {
+		name, _ := s["name"].(string)
+		if name == "" {
+			continue
+		}
+		pm.mu.Lock()
+		st, ok := pm.services[name]
+		if !ok {
+			pm.mu.Unlock()
+			continue
+		}
+		delete(st.refs, projectID)
+		last := len(st.refs) == 0
+		if last {
+			delete(pm.services, name)
+		}
+		pm.mu.Unlock()
+		if last {
+			pm.stopShared(st)
+		}
+	}
+}
+
+// startShared launches the service command (bash -c), gated on free memory.
+func (pm *ProcManager) startShared(st *svcState) error {
+	if avail, err := memAvailableMB(); err == nil && avail < 100 {
+		return fmt.Errorf("可用内存不足（%dMB），拒绝启动共享服务", avail)
+	}
+	logDir := "/home/ubuntu/apps/lambs-server/logs"
+	os.MkdirAll(logDir, 0755)
+	lf, err := os.OpenFile(logDir+"/svc-"+st.name+".log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err == nil {
+		st.logFile = lf
+	}
+	cmd := exec.Command("bash", "-c", st.startCmd)
+	if lf != nil {
+		cmd.Stdout = lf
+		cmd.Stderr = lf
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		if lf != nil {
+			lf.Close()
+		}
+		return err
+	}
+	st.cmd = cmd
+	go func() {
+		cmd.Wait()
+		st.cmd = nil
+		if lf != nil {
+			lf.Close()
+		}
+	}()
+	log.Printf("runtime: shared service %s started (%s)", st.name, st.startCmd)
+	return nil
+}
+
+// stopShared runs the stop command and kills the direct process if tracked.
+func (pm *ProcManager) stopShared(st *svcState) {
+	if st.stopCmd != "" {
+		c := exec.Command("bash", "-c", st.stopCmd)
+		c.CombinedOutput()
+	}
+	if st.cmd != nil && st.cmd.Process != nil {
+		syscall.Kill(-st.cmd.Process.Pid, syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { st.cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			syscall.Kill(-st.cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+	}
+	log.Printf("runtime: shared service %s stopped", st.name)
+}
+
+// serviceRunning checks whether a shared service is actually up.
+// systemctl-style commands are checked via is-active; direct runs via pid.
+func (pm *ProcManager) serviceRunning(st *svcState) bool {
+	if strings.Contains(st.startCmd, "systemctl") {
+		fields := strings.Fields(st.startCmd)
+		for i, f := range fields {
+			if f == "start" && i+1 < len(fields) {
+				out, err := exec.Command("systemctl", "is-active", fields[i+1]).Output()
+				if err == nil && strings.TrimSpace(string(out)) == "active" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return st.cmd != nil && st.cmd.Process != nil
+}
+
 // HealthMonitor checks managed processes every 30s.
 func (pm *ProcManager) HealthMonitor(enabled func() bool) {
 	for {
@@ -340,6 +520,28 @@ func (pm *ProcManager) HealthMonitor(enabled func() bool) {
 				}
 				nid := fmt.Sprintf("n%d", time.Now().UnixNano())
 				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "info", "进程恢复", fmt.Sprintf("「%s」进程已自动重启", p.name))
+			}
+		}
+		// Shared services: referenced (refs>0) but not running → restart.
+		pm.mu.RLock()
+		shared := make([]*svcState, 0, len(pm.services))
+		for _, st := range pm.services {
+			if len(st.refs) > 0 {
+				shared = append(shared, st)
+			}
+		}
+		pm.mu.RUnlock()
+		for _, st := range shared {
+			if pm.serviceRunning(st) {
+				continue
+			}
+			log.Printf("health: shared service %s down, restarting", st.name)
+			if err := pm.startShared(st); err != nil {
+				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
+					fmt.Sprintf("n%d", time.Now().UnixNano()), "", "alert", "共享服务异常", fmt.Sprintf("「%s」重启失败: %v", st.name, err))
+			} else {
+				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
+					fmt.Sprintf("n%d", time.Now().UnixNano()), "", "info", "共享服务恢复", fmt.Sprintf("「%s」已自动重启", st.name))
 			}
 		}
 	}
