@@ -108,12 +108,19 @@ func buildConfig(projects []models.Project) string {
 		"    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
 		"}", ""}
 	for _, p := range projects {
-		backend := p.BackendURL
-		if backend == "" {
-			backend = "http://127.0.0.1:" + p.Port
-		}
-		if !strings.HasPrefix(backend, "http://") && !strings.HasPrefix(backend, "https://") {
-			backend = "http://" + backend
+		// Web1 must reach the project through App1's on-demand TCP proxy
+		// (App1-TS:<port>). backend_url is the proxy's internal target on
+		// App1 and is NOT reachable from Web1 — using it directly here was
+		// wrong host semantics.
+		apiTarget := "http://100.92.91.11:" + p.Port
+		if p.Port == "" {
+			apiTarget = p.BackendURL
+			if apiTarget == "" {
+				continue
+			}
+			if !strings.HasPrefix(apiTarget, "http://") && !strings.HasPrefix(apiTarget, "https://") {
+				apiTarget = "http://" + apiTarget
+			}
 		}
 		bp := strings.TrimPrefix(p.BasePath, "/")
 		lines = append(lines, fmt.Sprintf(`
@@ -142,7 +149,7 @@ location /%s {
     error_page 403 = /lambs-offline;
     try_files $uri $uri/ /%s/index.html;
 }`, p.Name, bp, bp, bp, bp,
-			bp, bp, backend, bp, bp, bp))
+			bp, bp, apiTarget, bp, bp, bp))
 	}
 	return strings.Join(lines, "\n")
 }

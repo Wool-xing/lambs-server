@@ -108,7 +108,15 @@ func (s *RESTSource) ReadItems(collection string) ([]map[string]interface{}, []s
 	if rows == nil {
 		rows = []map[string]interface{}{}
 	}
-	return rows, cols, "id", nil
+	// Honest pk detection: only claim "id" when rows actually carry it.
+	// Otherwise the UI must show "无主键" instead of breaking edits.
+	pk := ""
+	if len(rows) > 0 {
+		if _, ok := rows[0]["id"]; ok {
+			pk = "id"
+		}
+	}
+	return rows, cols, pk, nil
 }
 
 func (s *RESTSource) InsertItem(collection string, data map[string]interface{}) error {
