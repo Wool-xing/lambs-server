@@ -188,6 +188,14 @@ func RunScheduledBackups() {
 		result := doBackup(pid, dsn)
 		log.Printf("scheduled-backup: %s ok=%v %v", pid, result["ok"], result)
 		if result["ok"] == true {
+			// Off-box copy: upload to Telegram backup channel (GPG-encrypted).
+			// Local-only backups die with the box — this closes the gap.
+			if fname, _ := result["filename"].(string); fname != "" {
+				fpath := dir + "/" + fname
+				if _, err := tgbackup.Upload(fpath, fmt.Sprintf("Scheduled backup: %s @ %s", pid, time.Now().Format("2006-01-02 15:04"))); err != nil {
+					log.Printf("scheduled-backup: %s TG upload failed: %v", pid, err)
+				}
+			}
 			go notify.NotifyAdmin("Lambs自动备份完成",
 				fmt.Sprintf("项目 %s 自动备份完成\n文件: %v\n大小: %v MB\n时间: %s", pid, result["filename"], result["size_mb"], time.Now().Format("2006-01-02 15:04:05")))
 		}

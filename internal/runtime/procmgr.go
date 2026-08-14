@@ -18,6 +18,7 @@ type procState struct {
 	cmd     *exec.Cmd
 	port    int
 	started time.Time
+	logFile *os.File
 }
 
 type cpuSample struct {
@@ -104,16 +105,32 @@ func (pm *ProcManager) Start(projectID string) error {
 		// Only force PORT for legacy binary-path mode — startup_command handles its own port
 		cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%s", portStr))
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Runtime-managed processes log to a per-project file so the
+	// logs endpoint can show real output (journalctl only covers systemd units).
+	logDir := "/home/ubuntu/apps/lambs-server/logs"
+	os.MkdirAll(logDir, 0755)
+	lf, lfErr := os.OpenFile(logDir+"/"+projectID+".log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if lfErr == nil {
+		cmd.Stdout = lf
+		cmd.Stderr = lf
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
+		if lfErr == nil {
+			lf.Close()
+		}
 		return fmt.Errorf("start %s: %w", svcName, err)
 	}
-	pm.procs[projectID] = &procState{cmd: cmd, port: port, started: time.Now()}
+	pm.procs[projectID] = &procState{cmd: cmd, port: port, started: time.Now(), logFile: lf}
 	go func() {
 		cmd.Wait()
 		pm.mu.Lock()
+		if s, ok := pm.procs[projectID]; ok && s.logFile != nil {
+			s.logFile.Close()
+		}
 		delete(pm.procs, projectID)
 		pm.mu.Unlock()
 	}()
@@ -139,7 +156,11 @@ func (pm *ProcManager) Stop(projectID string) error {
 		return nil
 	}
 	pid := s.cmd.Process.Pid
+	lf := s.logFile
 	pm.mu.Unlock()
+	if lf != nil {
+		lf.Close()
+	}
 	syscall.Kill(-pid, syscall.SIGTERM)
 	done := make(chan struct{})
 	go func() { s.cmd.Wait(); close(done) }()

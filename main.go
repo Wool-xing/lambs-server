@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,7 +155,43 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
-	auth.JSONOK(w, []map[string]string{{"msg": "service running", "time": time.Now().Format(time.RFC3339)}})
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	if lines < 1 || lines > 200 {
+		lines = 50
+	}
+	var svc string
+	db.DB.QueryRow("SELECT COALESCE(service_name,'') FROM projects WHERE id=$1", id).Scan(&svc)
+	if svc != "" {
+		cmd := exec.Command("journalctl", "-u", svc+".service", "-n", strconv.Itoa(lines), "--no-pager", "-o", "short")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			auth.JSONOK(w, map[string]interface{}{"logs": []string{"journalctl: " + strings.TrimSpace(string(out)) + " " + err.Error()}})
+			return
+		}
+		split := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(split) == 1 && split[0] == "" {
+			split = []string{}
+		}
+		auth.JSONOK(w, map[string]interface{}{"logs": split})
+		return
+	}
+	// Runtime-managed process: tail the per-project log file
+	logPath := "/home/ubuntu/apps/lambs-server/logs/" + id + ".log"
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		auth.JSONOK(w, map[string]interface{}{"logs": []string{}})
+		return
+	}
+	chunk := string(data)
+	if len(chunk) > 64*1024 {
+		chunk = chunk[len(chunk)-64*1024:]
+	}
+	all := strings.Split(chunk, "\n")
+	start := 0
+	if len(all) > lines {
+		start = len(all) - lines
+	}
+	auth.JSONOK(w, map[string]interface{}{"logs": all[start:]})
 }
 
 func main() {

@@ -182,9 +182,6 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24,$25) RETURNING id",
 		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
 	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
-	// Use config to check if runtime is enabled
-	var rtEnabled bool
-	db.DB.QueryRow("SELECT 1 FROM pg_type WHERE typname='dummy'").Scan(&rtEnabled) // dummy — actual check via config
 	go nginx.Sync()
 	auth.JSONCreated(w, p)
 }
