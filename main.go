@@ -387,9 +387,7 @@ func main() {
 	mux.HandleFunc("GET /api/gate/check-internal", auth.CORS(gate.HandleCheckInternal))
 	mux.HandleFunc("GET /api/gate/offline-page", auth.CORS(gate.HandleOfflinePage))
 	mux.HandleFunc("GET /api/gate/project-logo", auth.CORS(gate.HandleProjectLogo))
-	mux.HandleFunc("POST /api/auth/register", auth.CORS(credLimit(func(w http.ResponseWriter, r *http.Request) {
-		auth.JSONErr(w, 400, "Registration not available")
-	})))
+	mux.HandleFunc("POST /api/auth/register", auth.CORS(credLimit(auth.HandleRegister)))
 	mux.HandleFunc("POST /api/auth/forgot-password/request", auth.CORS(credLimit(auth.HandleForgotRequest)))
 	mux.HandleFunc("POST /api/auth/forgot-password/verify", auth.CORS(credLimit(auth.HandleForgotVerify)))
 

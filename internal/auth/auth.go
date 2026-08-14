@@ -177,6 +177,67 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleRegister creates a viewer account with no project access. A
+// super_admin must grant project_access before the account can see anything —
+// registration alone opens no data.
+func HandleRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONErr(w, 400, "无效请求")
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	req.Email = strings.TrimSpace(req.Email)
+	if req.Username == "" || len(req.Username) > 64 {
+		JSONErr(w, 400, "用户名不能为空且不超过64位")
+		return
+	}
+	if !strings.Contains(req.Email, "@") || !strings.Contains(strings.Split(req.Email, "@")[len(strings.Split(req.Email, "@"))-1], ".") {
+		JSONErr(w, 400, "邮箱格式不正确")
+		return
+	}
+	if len(req.Password) < 6 {
+		JSONErr(w, 400, "密码至少6位")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.Password)), bcrypt.DefaultCost)
+	if err != nil {
+		JSONErr(w, 500, "密码处理失败")
+		return
+	}
+	var id string
+	err = db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access) VALUES (gen_random_uuid(),$1,$2,$3,$4,'viewer','active','[]') RETURNING id::text",
+		req.Username, req.Username, req.Email, string(hash)).Scan(&id)
+	if err != nil {
+		JSONErr(w, 400, "用户名或邮箱已被注册")
+		return
+	}
+	db.DB.Exec("INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ($1,$2,$3,$4,$5)",
+		id, req.Username, "注册", "Lambs", "新用户注册(viewer)")
+	// Auto-login: issue the same 8h token the login endpoint would.
+	claims := jwt.MapClaims{
+		"user_id":  id,
+		"username": req.Username,
+		"role":     "viewer",
+		"exp":      jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
+		"iat":      jwt.NewNumericDate(time.Now()),
+	}
+	tokenStr, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(JWTKey)
+	if err != nil {
+		JSONErr(w, 500, "token生成失败")
+		return
+	}
+	JSONCreated(w, map[string]interface{}{
+		"access_token": tokenStr,
+		"token_type":   "bearer",
+		"user":         map[string]interface{}{"id": id, "username": req.Username, "name": req.Username, "email": req.Email, "role": "viewer", "status": "active"},
+	})
+}
+
 func HandleMe(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 	var user models.User

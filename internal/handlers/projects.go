@@ -511,6 +511,11 @@ func TestConnection(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
 	var dsn, healthURL string
 	db.DB.QueryRow("SELECT COALESCE(dsn,''), COALESCE(health_url,'') FROM projects WHERE id=$1", id).Scan(&dsn, &healthURL)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	auth.JSONOK(w, db.TestHealth(dsn, healthURL))
 }
 
