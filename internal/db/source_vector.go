@@ -139,6 +139,16 @@ func (s *VectorSource) ReadItems(collection string) ([]map[string]interface{}, [
 	return rows, cols, "id", nil
 }
 
+// ensureCollection auto-creates a collection sized for vectorSize dimensions
+// with Cosine distance. Used on first insert/update for a fresh collection.
+func (s *VectorSource) ensureCollection(collection string, vectorSize int) error {
+	create := map[string]interface{}{
+		"vectors": map[string]interface{}{"size": vectorSize, "distance": "Cosine"},
+	}
+	_, err := s.do("PUT", fmt.Sprintf("/collections/%s", url.PathEscape(collection)), create)
+	return err
+}
+
 func (s *VectorSource) InsertItem(collection string, data map[string]interface{}) error {
 	if err := validateTable(collection); err != nil {
 		return err
@@ -167,10 +177,7 @@ func (s *VectorSource) InsertItem(collection string, data map[string]interface{}
 	_, err := s.do("PUT", fmt.Sprintf("/collections/%s/points?wait=true", url.PathEscape(collection)), body)
 	if err != nil && vector != nil && strings.Contains(err.Error(), "doesn't exist") {
 		// Auto-create the collection from the first vector's size
-		create := map[string]interface{}{
-			"vectors": map[string]interface{}{"size": len(vector), "distance": "Cosine"},
-		}
-		if _, cerr := s.do("PUT", fmt.Sprintf("/collections/%s", url.PathEscape(collection)), create); cerr != nil {
+		if cerr := s.ensureCollection(collection, len(vector)); cerr != nil {
 			return cerr
 		}
 		_, err = s.do("PUT", fmt.Sprintf("/collections/%s/points?wait=true", url.PathEscape(collection)), body)
@@ -189,10 +196,18 @@ func (s *VectorSource) UpdateItem(collection, pkCol, pkVal string, data map[stri
 		}
 	}
 	body := map[string]interface{}{"points": []map[string]interface{}{{"id": pkVal, "payload": payload}}}
+	var vector []interface{}
 	if v, ok := data["vector"].([]interface{}); ok {
+		vector = v
 		body["points"].([]map[string]interface{})[0]["vector"] = v
 	}
 	_, err := s.do("PUT", fmt.Sprintf("/collections/%s/points?wait=true", url.PathEscape(collection)), body)
+	if err != nil && vector != nil && strings.Contains(err.Error(), "doesn't exist") {
+		if cerr := s.ensureCollection(collection, len(vector)); cerr != nil {
+			return cerr
+		}
+		_, err = s.do("PUT", fmt.Sprintf("/collections/%s/points?wait=true", url.PathEscape(collection)), body)
+	}
 	return err
 }
 

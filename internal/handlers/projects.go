@@ -675,13 +675,19 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	table := r.URL.Query().Get("table")
 	pkCol := r.URL.Query().Get("pk")
 	pkVal := r.URL.Query().Get("pkval")
-	if table == "" || pkCol == "" || pkVal == "" { auth.JSONErr(w, 400, "缺少table/pk/pkval参数"); return }
+	if table == "" || pkCol == "" { auth.JSONErr(w, 400, "缺少table/pk参数"); return }
 	var row map[string]interface{}
 	json.NewDecoder(r.Body).Decode(&row)
 	if err := validateRowCols(row); err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
-	if err := src.UpdateItem(table, pkCol, pkVal, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if pkVal == "" {
+		// Empty pkval = insert new row (sources like Qdrant generate their own IDs)
+		if err := src.InsertItem(table, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	} else if err := src.UpdateItem(table, pkCol, pkVal, row); err != nil {
+		auth.JSONErr(w, 500, err.Error())
+		return
+	}
 	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONOK(w, map[string]string{"updated": pkVal})
 }
