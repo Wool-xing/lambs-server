@@ -176,6 +176,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.DB.Close()
+	auth.EnsureForgotSchema()
 
 	if lambsConfig.RuntimeBase == "" {
 		lambsConfig.RuntimeBase = "/home/ubuntu/apps"
@@ -225,6 +226,8 @@ func main() {
 	mux.HandleFunc("POST /api/auth/register", auth.CORS(func(w http.ResponseWriter, r *http.Request) {
 		auth.JSONErr(w, 400, "Registration not available")
 	}))
+	mux.HandleFunc("POST /api/auth/forgot-password/request", auth.CORS(auth.HandleForgotRequest))
+	mux.HandleFunc("POST /api/auth/forgot-password/verify", auth.CORS(auth.HandleForgotVerify))
 
 	a := auth.WithAuth
 	sa := auth.WithAdmin

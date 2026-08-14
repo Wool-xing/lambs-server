@@ -2,6 +2,7 @@ package notify
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net/smtp"
 
@@ -21,6 +22,15 @@ func NotifyAdmin(subject, body string) {
 		return
 	}
 	SendMail(config.AdminEmail, subject, body)
+}
+
+// SendMailForget sends a password-reset email and errors when SMTP is not configured.
+func SendMailForget(to, subject, body string) error {
+	if config == nil || config.SMTPHost == "" || config.SMTPFrom == "" {
+		return fmt.Errorf("邮件服务未配置，请联系管理员重置密码")
+	}
+	SendMail(to, subject, body)
+	return nil
 }
 
 // SendMail sends a plain-text email over SMTP with STARTTLS.
