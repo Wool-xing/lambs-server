@@ -155,6 +155,41 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 	auth.JSONOK(w, logs)
 }
 
+// handleLocalServices lists systemd units available for on-demand management.
+// Units Lambs itself depends on are marked managed=false — stopping them
+// would take down the management plane (e.g. its own PostgreSQL).
+func handleLocalServices(w http.ResponseWriter, r *http.Request) {
+	critical := map[string]bool{
+		"postgresql.service":   true,
+		"postgresql@.service":  true,
+		"lambs-server.service": true,
+		"nginx.service":        true,
+		"ssh.service":          true,
+		"tailscaled.service":   true,
+		"fail2ban.service":     true,
+	}
+	out := []map[string]interface{}{}
+	cmd := exec.Command("systemctl", "list-unit-files", "--type=service", "--no-pager")
+	data, err := cmd.Output()
+	if err != nil {
+		auth.JSONOK(w, map[string]interface{}{"services": out})
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		if !strings.HasSuffix(name, ".service") || strings.Contains(name, "@") {
+			continue
+		}
+		managed := !critical[name]
+		out = append(out, map[string]interface{}{"name": strings.TrimSuffix(name, ".service"), "unit": name, "managed": managed})
+	}
+	auth.JSONOK(w, map[string]interface{}{"services": out})
+}
+
 func handleDetectStartup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Repo string `json:"repo"`
@@ -416,6 +451,7 @@ func main() {
 
 	// Runtime API
 	mux.HandleFunc("POST /api/runtime/detect", sa(handleDetectStartup))
+	mux.HandleFunc("GET /api/runtime/local-services", sa(handleLocalServices))
 	mux.HandleFunc("POST /api/runtime/ports/allocate/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
 		port, err := runtime.PortMgr.Allocate(r.PathValue("id"))
 		if err != nil { auth.JSONErr(w, 500, err.Error()); return }
