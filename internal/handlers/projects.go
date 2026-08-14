@@ -27,6 +27,77 @@ func SHA256Hex(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// parseDatasources normalizes the datasources jsonb into a slice of maps.
+func parseDatasources(raw interface{}) []map[string]interface{} {
+	switch v := raw.(type) {
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(v))
+		for _, e := range v {
+			if m, ok := e.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	case string:
+		var arr []map[string]interface{}
+		if json.Unmarshal([]byte(v), &arr) == nil {
+			return arr
+		}
+	}
+	return []map[string]interface{}{}
+}
+
+// primaryDatasource returns the is_primary source, falling back to the first.
+func primaryDatasource(dss []map[string]interface{}) map[string]interface{} {
+	if len(dss) == 0 {
+		return nil
+	}
+	for _, d := range dss {
+		if b, _ := d["is_primary"].(bool); b {
+			return d
+		}
+	}
+	return dss[0]
+}
+
+// normalizeDatasources assigns stable ids and a single is_primary marker.
+func normalizeDatasources(dss []map[string]interface{}) []map[string]interface{} {
+	hasPrimary := false
+	for i, d := range dss {
+		if id, _ := d["id"].(string); id == "" {
+			d["id"] = fmt.Sprintf("ds%d", i+1)
+		}
+		if b, _ := d["is_primary"].(bool); b {
+			hasPrimary = true
+		}
+	}
+	if !hasPrimary && len(dss) > 0 {
+		dss[0]["is_primary"] = true
+	}
+	return dss
+}
+
+// resolveDatasource returns the dsn for the requested source id.
+// dsID "" means the legacy primary (projects.dsn column).
+func resolveDatasource(projectID, dsID, fallbackDSN string) (string, error) {
+	if dsID == "" {
+		return fallbackDSN, nil
+	}
+	var raw string
+	if err := db.DB.QueryRow("SELECT COALESCE(datasources::text,'[]') FROM projects WHERE id=$1", projectID).Scan(&raw); err != nil {
+		return "", fmt.Errorf("项目不存在")
+	}
+	for _, d := range parseDatasources(raw) {
+		if id, _ := d["id"].(string); id == dsID {
+			if dsn, ok := d["dsn"].(string); ok && dsn != "" && dsn != "—" {
+				return dsn, nil
+			}
+			return "", fmt.Errorf("该数据源未配置连接串")
+		}
+	}
+	return "", fmt.Errorf("数据源不存在")
+}
+
 var safeColName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // validateRowCols rejects payload keys that would be spliced into SQL
@@ -89,7 +160,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 	sortBy := r.URL.Query().Get("sort_by")
 	userRole := r.Header.Get("X-Role")
 	userID := r.Header.Get("X-User-ID")
-	query := "SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE 1=1"
+	query := "SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE 1=1"
 	var args []interface{}
 	argIdx := 0
 	if statusFilter != "" && statusFilter != "all" { argIdx++; query += " AND status=$" + strconv.Itoa(argIdx); args = append(args, statusFilter) }
@@ -123,8 +194,8 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 	projects := []models.Project{}
 	for rows.Next() {
 		var p models.Project
-		var tagsRaw, featuresRaw, tabsRaw sql.NullString
-		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &p.CreatedAt, &p.UpdatedAt, &p.BackupIntervalHours, &p.BackupRetentionDays)
+		var tagsRaw, featuresRaw, tabsRaw, dsRaw sql.NullString
+		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &p.CreatedAt, &p.UpdatedAt, &p.BackupIntervalHours, &p.BackupRetentionDays)
 		if p.DSN == "" { p.DSN = "—" }
 		if tagsRaw.Valid { json.Unmarshal([]byte(tagsRaw.String), &p.Tags) }
 		if _, ok := p.Tags.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tags.(string)), &arr); p.Tags = arr }
@@ -135,9 +206,13 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 		if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 		if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 		if p.Tabs == nil { p.Tabs = []interface{}{} }
-		// DSN is super_admin-only — mask for all other roles
+		if dsRaw.Valid { json.Unmarshal([]byte(dsRaw.String), &p.Datasources) }
+		if _, ok := p.Datasources.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Datasources.(string)), &arr); p.Datasources = arr }
+		if p.Datasources == nil { p.Datasources = []interface{}{} }
+		// DSN/datasources are super_admin-only — mask for all other roles
 		if userRole != "super_admin" {
 			p.DSN = "—"
+			p.Datasources = []interface{}{}
 		}
 		projects = append(projects, p)
 	}
@@ -160,9 +235,9 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 		if !allowed { auth.JSONErr(w, 403, "无权限访问该项目"); return }
 	}
 	var p models.Project
-	var tagsRaw, featuresRaw, tabsRaw sql.NullString
-	err := db.DB.QueryRow("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE id=$1", id).
-		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &p.BackupIntervalHours, &p.BackupRetentionDays)
+	var tagsRaw, featuresRaw, tabsRaw, dsRaw sql.NullString
+	err := db.DB.QueryRow("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE id=$1", id).
+		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &p.BackupIntervalHours, &p.BackupRetentionDays)
 	if err != nil { auth.JSONErr(w, 404, "项目不存在"); return }
 	if p.DSN == "" { p.DSN = "—" }
 	if tagsRaw.Valid { json.Unmarshal([]byte(tagsRaw.String), &p.Tags) }
@@ -174,9 +249,13 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 	if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 	if p.Tabs == nil { p.Tabs = []interface{}{} }
-	// DSN is super_admin-only — mask for all other roles
+	if dsRaw.Valid { json.Unmarshal([]byte(dsRaw.String), &p.Datasources) }
+	if _, ok := p.Datasources.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Datasources.(string)), &arr); p.Datasources = arr }
+	if p.Datasources == nil { p.Datasources = []interface{}{} }
+	// DSN/datasources are super_admin-only — mask for all other roles
 	if userRole != "super_admin" {
 		p.DSN = "—"
+		p.Datasources = []interface{}{}
 	}
 	auth.JSONOK(w, p)
 }
@@ -193,9 +272,29 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	if p.Tabs != nil { if b, err := json.Marshal(p.Tabs); err == nil { tabsJSON = string(b) } }
 	tagsJSON := "[]"
 	if p.Tags != nil { if b, err := json.Marshal(p.Tags); err == nil { tagsJSON = string(b) } }
-	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24,$25) RETURNING id",
-		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
+	// Datasources: explicit array wins; otherwise derive one from legacy dsn.
+	dss := parseDatasources(p.Datasources)
+	if len(dss) == 0 && p.DSN != "" && p.DSN != "—" {
+		dss = []map[string]interface{}{{"id": "ds1", "name": "主数据源", "type": p.DB, "dsn": p.DSN, "is_primary": true}}
+	}
+	dss = normalizeDatasources(dss)
+	dsJSON := "[]"
+	if b, err := json.Marshal(dss); err == nil {
+		dsJSON = string(b)
+	}
+	// Primary source mirrors legacy dsn/db_type columns.
+	if prim := primaryDatasource(dss); prim != nil {
+		if s, ok := prim["dsn"].(string); ok {
+			p.DSN = s
+		}
+		if t, ok := prim["type"].(string); ok {
+			p.DB = t
+		}
+	}
+	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24::jsonb,$25,$26) RETURNING id",
+		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, dsJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
 	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
+	p.Datasources = dss
 	go nginx.Sync()
 	auth.JSONCreated(w, p)
 }
@@ -210,16 +309,18 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Header.Get("X-Role") != "super_admin" {
 		p.DSN = ""
 	}
-	// Detect which backup fields were present in the request
+	// Detect which optional fields were present in the request
 	var raw map[string]json.RawMessage
-	hasInterval, hasRetention := false, false
+	hasInterval, hasRetention, hasDS := false, false, false
 	if json.Unmarshal(body, &raw) == nil {
 		_, hasInterval = raw["backup_interval_hours"]
 		_, hasRetention = raw["backup_retention_days"]
+		_, hasDS = raw["datasources"]
 	}
 	var cur models.Project
-	db.DB.QueryRow("SELECT name, description, icon_url, stack, port, db_type, dsn, backend_url, service_name, base_path, COALESCE(tags::text,'[]'), offline_msg, COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE id=$1", id).
-		Scan(&cur.Name, &cur.Desc, &cur.IconURL, &cur.Stack, &cur.Port, &cur.DB, &cur.DSN, &cur.BackendURL, &cur.ServiceName, &cur.BasePath, &cur.Tags, &cur.OfflineMsg, &cur.StartupCommand, &cur.HealthURL, &cur.BackupIntervalHours, &cur.BackupRetentionDays)
+	var curDS sql.NullString
+	db.DB.QueryRow("SELECT name, description, icon_url, stack, port, db_type, dsn, backend_url, service_name, base_path, COALESCE(tags::text,'[]'), offline_msg, COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(datasources::text,'[]') FROM projects WHERE id=$1", id).
+		Scan(&cur.Name, &cur.Desc, &cur.IconURL, &cur.Stack, &cur.Port, &cur.DB, &cur.DSN, &cur.BackendURL, &cur.ServiceName, &cur.BasePath, &cur.Tags, &cur.OfflineMsg, &cur.StartupCommand, &cur.HealthURL, &cur.BackupIntervalHours, &cur.BackupRetentionDays, &curDS)
 	if !hasInterval { p.BackupIntervalHours = cur.BackupIntervalHours }
 	if !hasRetention { p.BackupRetentionDays = cur.BackupRetentionDays }
 	if p.Name == "" { p.Name = cur.Name }
@@ -236,8 +337,28 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	if p.OfflineMsg == "" { p.OfflineMsg = cur.OfflineMsg }
 	if p.Tags == nil { p.Tags = cur.Tags }
 	tagsJSON, _ := json.Marshal(p.Tags)
-	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, stack=$4, port=$5, db_type=$6, dsn=$7, backend_url=$8, service_name=$9, base_path=$10, tags=$11::jsonb, offline_msg=$12, startup_command=$13, health_url=$14, backup_interval_hours=$15, backup_retention_days=$16 WHERE id=$17",
-		p.Name, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, id)
+	// Datasources: super_admin may replace the list; primary source then
+	// mirrors dsn/db_type. Absent from payload → keep current.
+	dsJSON := "[]"
+	if curDS.Valid {
+		dsJSON = curDS.String
+	}
+	if hasDS && r.Header.Get("X-Role") == "super_admin" {
+		dss := normalizeDatasources(parseDatasources(p.Datasources))
+		if prim := primaryDatasource(dss); prim != nil {
+			if s, ok := prim["dsn"].(string); ok {
+				p.DSN = s
+			}
+			if t, ok := prim["type"].(string); ok {
+				p.DB = t
+			}
+		}
+		if b, err := json.Marshal(dss); err == nil {
+			dsJSON = string(b)
+		}
+	}
+	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, stack=$4, port=$5, db_type=$6, dsn=$7, backend_url=$8, service_name=$9, base_path=$10, tags=$11::jsonb, offline_msg=$12, startup_command=$13, health_url=$14, backup_interval_hours=$15, backup_retention_days=$16, datasources=$17::jsonb WHERE id=$18",
+		p.Name, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, dsJSON, id)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"updated": id})
@@ -337,6 +458,11 @@ func SyncProject(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
 	var dsn string
 	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	users := db.SyncUserData(dsn)
 	userCount := len(users)
 	db.DB.Exec("UPDATE projects SET users_count=$1, updated_at=NOW() WHERE id=$2", userCount, id)
@@ -371,6 +497,11 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectView(r, id) { auth.JSONErr(w, 403, "无权限访问该项目"); return }
 	var dsn string
 	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	table := r.URL.Query().Get("table")
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
@@ -390,6 +521,11 @@ func ListTableNames(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectView(r, id) { auth.JSONErr(w, 403, "无权限访问该项目"); return }
 	var dsn string
 	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	tables, err := src.ListCollections()
@@ -434,6 +570,11 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
 	var dsn string
 	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	table := r.URL.Query().Get("table")
 	pkCol := r.URL.Query().Get("pk")
 	pkVal := r.URL.Query().Get("pkval")
@@ -452,6 +593,11 @@ func DeleteTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
 	var dsn string
 	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	table := r.URL.Query().Get("table")
 	pkCol := r.URL.Query().Get("pk")
 	pkVal := r.URL.Query().Get("pkval")
@@ -467,6 +613,11 @@ func InsertTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
 	var dsn string
 	db.DB.QueryRow("SELECT dsn FROM projects WHERE id=$1", id).Scan(&dsn)
+	var err error
+	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	table := r.URL.Query().Get("table")
 	if table == "" { auth.JSONErr(w, 400, "缺少table参数"); return }
 	var row map[string]interface{}
@@ -561,12 +712,18 @@ func CloneProject(w http.ResponseWriter, r *http.Request, id string) {
 	if string(featJSON) == "null" { featJSON = []byte("[]") }
 	if string(tabsJSON) == "null" { tabsJSON = []byte("[]") }
 	if string(tagsJSON) == "null" { tagsJSON = []byte("[]") }
+	// Clone's datasources = single primary source mirroring the legacy dsn.
+	cloneDS := []map[string]interface{}{}
+	if orig.DSN != "" && orig.DSN != "—" {
+		cloneDS = []map[string]interface{}{{"id": "ds1", "name": "主数据源", "type": orig.DB, "dsn": orig.DSN, "is_primary": true}}
+	}
+	dsJSON, _ := json.Marshal(cloneDS)
 	// Clone copies metadata + datasource only. Process/routing fields (port,
 	// service_name, startup_command, health_url, base_path, backend_url) are
 	// intentionally NOT copied — a clone reusing them would clash with the
 	// source project when enabled.
-	_, err = db.DB.Exec("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, tags, offline_msg, features, tabs) VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16::jsonb,$17::jsonb)",
-		orig.ID, orig.Name, orig.Repo, orig.Desc, orig.IconURL, orig.Stack, orig.DB, orig.DSN, 0, orig.Status, orig.Order, orig.Pinned, orig.IconCls, string(tagsJSON), orig.OfflineMsg, string(featJSON), string(tabsJSON))
+	_, err = db.DB.Exec("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, tags, offline_msg, features, tabs, datasources) VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb)",
+		orig.ID, orig.Name, orig.Repo, orig.Desc, orig.IconURL, orig.Stack, orig.DB, orig.DSN, 0, orig.Status, orig.Order, orig.Pinned, orig.IconCls, string(tagsJSON), orig.OfflineMsg, string(featJSON), string(tabsJSON), string(dsJSON))
 	if err != nil { auth.JSONErr(w, 400, "创建副本失败: "+err.Error()); return }
 	auth.JSONCreated(w, orig)
 }

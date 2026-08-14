@@ -25,6 +25,7 @@ type Project struct {
 	OfflineMsg          string      `json:"offline_msg"`
 	Features            interface{} `json:"features"`
 	Tabs                interface{} `json:"tabs"`
+	Datasources         interface{} `json:"datasources"`
 	CreatedAt           string      `json:"created_at"`
 	UpdatedAt           string      `json:"updated_at"`
 	BackupIntervalHours int         `json:"backup_interval_hours"`
