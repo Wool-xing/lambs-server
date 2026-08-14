@@ -535,9 +535,10 @@ func ListTableNames(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // refreshTabsSnapshot re-syncs one table's snapshot in the project's tabs jsonb.
-func refreshTabsSnapshot(projectID, table string) {
-	var dsn, tabsRaw string
-	db.DB.QueryRow("SELECT dsn, COALESCE(tabs::text,'[]') FROM projects WHERE id=$1", projectID).Scan(&dsn, &tabsRaw)
+// dsn must be the datasource the row was written to — not necessarily the primary.
+func refreshTabsSnapshot(projectID, table, dsn string) {
+	var tabsRaw string
+	db.DB.QueryRow("SELECT COALESCE(tabs::text,'[]') FROM projects WHERE id=$1", projectID).Scan(&tabsRaw)
 	src, err := db.NewDataSource(dsn)
 	if err != nil { return }
 	rows, cols, pk, err := src.ReadItems(table)
@@ -585,7 +586,7 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.UpdateItem(table, pkCol, pkVal, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
-	refreshTabsSnapshot(id, table)
+	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONOK(w, map[string]string{"updated": pkVal})
 }
 
@@ -605,7 +606,7 @@ func DeleteTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.DeleteItem(table, pkCol, pkVal); err != nil { auth.JSONErr(w, 500, err.Error()); return }
-	refreshTabsSnapshot(id, table)
+	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONOK(w, map[string]string{"deleted": pkVal})
 }
 
@@ -626,7 +627,7 @@ func InsertTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.InsertItem(table, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
-	refreshTabsSnapshot(id, table)
+	refreshTabsSnapshot(id, table, dsn)
 	auth.JSONCreated(w, row)
 }
 
