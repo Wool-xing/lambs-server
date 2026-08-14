@@ -53,8 +53,7 @@ func AutoRefresh() {
 		for rows.Next() {
 			var id, dsn string
 			rows.Scan(&id, &dsn)
-			users := db.SyncUserData(dsn)
-			n := len(users)
+			n := db.SyncUserCount(dsn)
 			db.DB.Exec("UPDATE projects SET users_count=$1, updated_at=NOW() WHERE id=$2", n, id)
 			var fRaw sql.NullString
 			db.DB.QueryRow("SELECT features::text FROM projects WHERE id=$1", id).Scan(&fRaw)

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -227,6 +228,58 @@ func SyncUserData(dsn string) []map[string]interface{} {
 		}
 	}
 	return nil
+}
+
+// SyncUserCount returns the user-row count without fetching rows.
+// Cheap path for periodic refresh — unlike SyncUserData it never pulls data.
+func SyncUserCount(dsn string) int {
+	if dsn == "" || dsn == "—" {
+		return 0
+	}
+	dsn2 := strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
+	dsn2 = strings.Replace(dsn2, "sqlite:///", "", 1)
+	if strings.Contains(dsn, "postgres") {
+		tdb, err := sql.Open("postgres", dsn2+"?connect_timeout=5")
+		if err != nil {
+			return 0
+		}
+		defer tdb.Close()
+		for _, table := range []string{"users", "user", "accounts", "member"} {
+			if !safeTableName.MatchString(table) {
+				continue
+			}
+			var count int
+			if err := tdb.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count); err != nil {
+				continue
+			}
+			if count > 0 {
+				return count
+			}
+		}
+		return 0
+	}
+	if strings.Contains(dsn, "sqlite") {
+		if idx := strings.Index(dsn2, "?"); idx >= 0 {
+			dsn2 = dsn2[:idx]
+		}
+		for _, table := range []string{"users", "user", "accounts", "member"} {
+			if !safeTableName.MatchString(table) {
+				continue
+			}
+			cmd := exec.Command("sqlite3", dsn2, fmt.Sprintf("SELECT COUNT(*) FROM %s;", table))
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			if err := cmd.Run(); err != nil {
+				continue
+			}
+			count, err := strconv.Atoi(strings.TrimSpace(out.String()))
+			if err != nil || count <= 0 {
+				continue
+			}
+			return count
+		}
+	}
+	return 0
 }
 
 var safeTableName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
