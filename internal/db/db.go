@@ -227,6 +227,54 @@ func SyncUserData(dsn string) []map[string]interface{} {
 			return result
 		}
 	}
+	if strings.Contains(dsn, "mysql") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return nil
+		}
+		pw, _ := u.User.Password()
+		goDSN := fmt.Sprintf("%s:%s@tcp(%s)/%s", u.User.Username(), pw, u.Host, strings.TrimPrefix(u.Path, "/"))
+		tdb, err := sql.Open("mysql", goDSN+"?timeout=5s")
+		if err != nil {
+			return nil
+		}
+		defer tdb.Close()
+		for _, table := range []string{"users", "user", "accounts", "member"} {
+			if !safeTableName.MatchString(table) {
+				continue
+			}
+			rows, err := tdb.Query(fmt.Sprintf("SELECT * FROM `%s` LIMIT 500", table))
+			if err != nil {
+				continue
+			}
+			cols, _ := rows.Columns()
+			var result []map[string]interface{}
+			for rows.Next() {
+				vals := make([]interface{}, len(cols))
+				ptrs := make([]interface{}, len(cols))
+				for i := range vals {
+					ptrs[i] = &vals[i]
+				}
+				rows.Scan(ptrs...)
+				row := make(map[string]interface{})
+				for i, c := range cols {
+					if !strings.Contains(strings.ToLower(c), "password") && !strings.Contains(strings.ToLower(c), "token") {
+						if b, ok := vals[i].([]byte); ok {
+							row[c] = string(b)
+						} else {
+							row[c] = fmt.Sprintf("%v", vals[i])
+						}
+					}
+				}
+				result = append(result, row)
+			}
+			rows.Close()
+			if len(result) == 0 {
+				continue
+			}
+			return result
+		}
+	}
 	return nil
 }
 
@@ -277,6 +325,31 @@ func SyncUserCount(dsn string) int {
 				continue
 			}
 			return count
+		}
+	}
+	if strings.Contains(dsn, "mysql") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return 0
+		}
+		pw, _ := u.User.Password()
+		goDSN := fmt.Sprintf("%s:%s@tcp(%s)/%s", u.User.Username(), pw, u.Host, strings.TrimPrefix(u.Path, "/"))
+		tdb, err := sql.Open("mysql", goDSN+"?timeout=5s")
+		if err != nil {
+			return 0
+		}
+		defer tdb.Close()
+		for _, table := range []string{"users", "user", "accounts", "member"} {
+			if !safeTableName.MatchString(table) {
+				continue
+			}
+			var count int
+			if err := tdb.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s`", table)).Scan(&count); err != nil {
+				continue
+			}
+			if count > 0 {
+				return count
+			}
 		}
 	}
 	return 0
