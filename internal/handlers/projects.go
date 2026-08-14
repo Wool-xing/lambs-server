@@ -221,10 +221,12 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 
 func DeleteProject(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
+	res, err := db.DB.Exec("DELETE FROM projects WHERE id=$1", id)
+	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if n, _ := res.RowsAffected(); n == 0 { auth.JSONErr(w, 404, "项目不存在"); return }
 	runtime.ProcMgr.Stop(id)
 	runtime.TCPProxyMgr.Stop(id)
 	runtime.PortMgr.Free(id)
-	db.DB.Exec("DELETE FROM projects WHERE id=$1", id)
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"deleted": id})
 }
@@ -533,7 +535,12 @@ func CloneProject(w http.ResponseWriter, r *http.Request, id string) {
 	if string(featJSON) == "null" { featJSON = []byte("[]") }
 	if string(tabsJSON) == "null" { tabsJSON = []byte("[]") }
 	if string(tagsJSON) == "null" { tagsJSON = []byte("[]") }
-	db.DB.Exec("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb)",
-		orig.ID, orig.Name, orig.Repo, orig.Desc, orig.IconURL, orig.Stack, orig.Port, orig.DB, orig.DSN, orig.UserCount, orig.Status, orig.Order, orig.Pinned, orig.IconCls, orig.BasePath, orig.BackendURL, orig.ServiceName, string(tagsJSON), orig.OfflineMsg, string(featJSON), string(tabsJSON))
+	// Clone copies metadata + datasource only. Process/routing fields (port,
+	// service_name, startup_command, health_url, base_path, backend_url) are
+	// intentionally NOT copied — a clone reusing them would clash with the
+	// source project when enabled.
+	_, err = db.DB.Exec("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, tags, offline_msg, features, tabs) VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16::jsonb,$17::jsonb)",
+		orig.ID, orig.Name, orig.Repo, orig.Desc, orig.IconURL, orig.Stack, orig.DB, orig.DSN, 0, orig.Status, orig.Order, orig.Pinned, orig.IconCls, string(tagsJSON), orig.OfflineMsg, string(featJSON), string(tabsJSON))
+	if err != nil { auth.JSONErr(w, 400, "创建副本失败: "+err.Error()); return }
 	auth.JSONCreated(w, orig)
 }
