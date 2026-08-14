@@ -326,6 +326,13 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	p.Datasources = dss
 	p.Services = uniq
 	go nginx.Sync()
+	// A newly created online project goes through the same lifecycle as a
+	// status switch to online: shared services first, then its own process.
+	if p.Status == "online" {
+		go runtime.ProcMgr.AttachServices(p.ID)
+		go runtime.TCPProxyMgr.Start(p.ID)
+		go runtime.ProcMgr.Start(p.ID)
+	}
 	auth.JSONCreated(w, p)
 }
 
@@ -415,13 +422,16 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 
 func DeleteProject(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
-	res, err := db.DB.Exec("DELETE FROM projects WHERE id=$1", id)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
-	if n, _ := res.RowsAffected(); n == 0 { auth.JSONErr(w, 404, "项目不存在"); return }
+	// Detach/stop BEFORE deleting the row — DetachServices reads the
+	// project's services from the DB; after deletion they would be gone
+	// and the refcount would never decrement.
 	runtime.ProcMgr.Stop(id)
 	runtime.TCPProxyMgr.Stop(id)
 	runtime.ProcMgr.DetachServices(id)
 	runtime.PortMgr.Free(id)
+	res, err := db.DB.Exec("DELETE FROM projects WHERE id=$1", id)
+	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if n, _ := res.RowsAffected(); n == 0 { auth.JSONErr(w, 404, "项目不存在"); return }
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"deleted": id})
 }
