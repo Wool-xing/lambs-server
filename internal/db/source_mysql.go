@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 // MySQLSource implements DataSource for MySQL-managed projects.
@@ -13,14 +16,25 @@ type MySQLSource struct {
 	dsn string
 }
 
-// goDSN converts mysql://user:pass@host:port/db to the go-sql-driver format user:pass@tcp(host:port)/db.
+// goDSN converts mysql://user:pass@host:port/db to a driver DSN.
+// mysql.Config.FormatDSN escapes special characters in credentials — raw
+// fmt.Sprintf breaks on passwords containing @/: etc.
 func (s *MySQLSource) goDSN() (string, error) {
 	u, err := url.Parse(s.dsn)
 	if err != nil {
 		return "", fmt.Errorf("invalid mysql dsn: %w", err)
 	}
 	pw, _ := u.User.Password()
-	return fmt.Sprintf("%s:%s@tcp(%s)/%s", u.User.Username(), pw, u.Host, strings.TrimPrefix(u.Path, "/")), nil
+	// NewConfig (not a struct literal) so driver defaults apply —
+	// notably AllowNativePasswords=true, required by MySQL 5.5.
+	cfg := mysql.NewConfig()
+	cfg.User = u.User.Username()
+	cfg.Passwd = pw
+	cfg.Net = "tcp"
+	cfg.Addr = u.Host
+	cfg.DBName = strings.TrimPrefix(u.Path, "/")
+	cfg.Timeout = 5 * time.Second
+	return cfg.FormatDSN(), nil
 }
 
 func (s *MySQLSource) open() (*sql.DB, error) {
@@ -28,7 +42,7 @@ func (s *MySQLSource) open() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sql.Open("mysql", dsn+"?timeout=5s")
+	return sql.Open("mysql", dsn)
 }
 
 func (s *MySQLSource) ListCollections() ([]string, error) {

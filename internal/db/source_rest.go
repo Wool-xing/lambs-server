@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -139,7 +140,7 @@ func (s *RESTSource) UpdateItem(collection, pkCol, pkVal string, data map[string
 		return err
 	}
 	body, _ := json.Marshal(data)
-	_, status, err := s.do("PUT", s.base()+"/"+collection+"/"+pkVal, body)
+	_, status, err := s.do("PUT", s.base()+"/"+collection+"/"+url.PathEscape(pkVal), body)
 	if err != nil {
 		return err
 	}
@@ -153,7 +154,7 @@ func (s *RESTSource) DeleteItem(collection, pkCol, pkVal string) error {
 	if err := validateTable(collection); err != nil {
 		return err
 	}
-	_, status, err := s.do("DELETE", s.base()+"/"+collection+"/"+pkVal, nil)
+	_, status, err := s.do("DELETE", s.base()+"/"+collection+"/"+url.PathEscape(pkVal), nil)
 	if err != nil {
 		return err
 	}

@@ -31,14 +31,22 @@ func (tp *TCPProxy) Start(projectID string) error {
 	if _, ok := tp.listeners[projectID]; ok {
 		return nil
 	}
-	var portStr, backendPort string
-	db.DB.QueryRow("SELECT COALESCE(port,''), COALESCE(backend_url,'') FROM projects WHERE id=$1", projectID).Scan(&portStr, &backendPort)
+	var portStr, backendPort, svcName, startCmd string
+	db.DB.QueryRow("SELECT COALESCE(port,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,'') FROM projects WHERE id=$1", projectID).
+		Scan(&portStr, &backendPort, &svcName, &startCmd)
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port == 0 {
 		return fmt.Errorf("invalid port for project %s", projectID)
 	}
 	backend := backendPort
 	if backend == "" {
+		// No backend_url: the proxy would target its own listener — a pure
+		// datasource project has nothing listening on its port, so skip it
+		// instead of building a self-connecting loop.
+		if svcName == "" && startCmd == "" {
+			log.Printf("tcp-proxy: %s has no backend, skipping proxy", projectID)
+			return nil
+		}
 		backend = fmt.Sprintf("127.0.0.1:%s", portStr)
 	}
 	backend = strings.TrimPrefix(backend, "http://")

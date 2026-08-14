@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 )
 
@@ -246,8 +246,14 @@ func SyncUserData(dsn string) []map[string]interface{} {
 			return nil
 		}
 		pw, _ := u.User.Password()
-		goDSN := fmt.Sprintf("%s:%s@tcp(%s)/%s", u.User.Username(), pw, u.Host, strings.TrimPrefix(u.Path, "/"))
-		tdb, err := sql.Open("mysql", goDSN+"?timeout=5s")
+		cfg := mysql.NewConfig()
+		cfg.User = u.User.Username()
+		cfg.Passwd = pw
+		cfg.Net = "tcp"
+		cfg.Addr = u.Host
+		cfg.DBName = strings.TrimPrefix(u.Path, "/")
+		cfg.Timeout = 5 * time.Second
+		tdb, err := sql.Open("mysql", cfg.FormatDSN())
 		if err != nil {
 			return nil
 		}
@@ -346,8 +352,14 @@ func SyncUserCount(dsn string) int {
 			return 0
 		}
 		pw, _ := u.User.Password()
-		goDSN := fmt.Sprintf("%s:%s@tcp(%s)/%s", u.User.Username(), pw, u.Host, strings.TrimPrefix(u.Path, "/"))
-		tdb, err := sql.Open("mysql", goDSN+"?timeout=5s")
+		cfg := mysql.NewConfig()
+		cfg.User = u.User.Username()
+		cfg.Passwd = pw
+		cfg.Net = "tcp"
+		cfg.Addr = u.Host
+		cfg.DBName = strings.TrimPrefix(u.Path, "/")
+		cfg.Timeout = 5 * time.Second
+		tdb, err := sql.Open("mysql", cfg.FormatDSN())
 		if err != nil {
 			return 0
 		}

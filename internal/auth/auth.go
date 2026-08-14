@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -56,6 +57,10 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		mapClaims := jwt.MapClaims{}
 		token, err := jwt.ParseWithClaims(tokenStr, mapClaims, func(t *jwt.Token) (interface{}, error) {
+			// Only HS256 is ever issued — accept nothing else (alg confusion defense).
+			if t.Method != jwt.SigningMethodHS256 {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
 			return JWTKey, nil
 		})
 		if err != nil || !token.Valid {

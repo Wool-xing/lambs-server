@@ -458,6 +458,11 @@ func (pm *ProcManager) startShared(st *svcState) error {
 		if lf != nil {
 			lf.Close()
 		}
+		// Reset the launch guard — a permanent "starting" flag would block
+		// every future retry and make HealthMonitor believe a restart succeeded.
+		pm.mu.Lock()
+		st.starting = false
+		pm.mu.Unlock()
 		return err
 	}
 	st.cmd = cmd
