@@ -28,18 +28,35 @@ func Sync() {
 		projects = append(projects, p)
 	}
 	conf := buildConfig(projects)
+	// 3 attempts with backoff — a transient Web1 outage must not silently
+	// leave the managed config stale forever.
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := pushConfig(conf); err == nil {
+			return
+		}
+		if attempt == 3 {
+			log.Printf("nginx: sync failed after 3 attempts, config may be stale")
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func pushConfig(conf string) error {
 	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
 		"ubuntu@100.126.18.126", "sudo tee /etc/nginx/sites-available/lambs-managed.conf > /dev/null")
 	cmd.Stdin = bytes.NewReader([]byte(conf))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("nginx: sync write failed: %v — %s", err, string(out))
-		return
+		return err
 	}
 	cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
 		"ubuntu@100.126.18.126", "sudo nginx -t && sudo systemctl reload nginx")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("nginx: sync reload failed: %v — %s", err, string(out))
+		return err
 	}
+	return nil
 }
 
 // AutoRefresh periodically syncs user counts from project datasources.
