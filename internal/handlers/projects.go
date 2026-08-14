@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,19 @@ import (
 func SHA256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+var safeColName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// validateRowCols rejects payload keys that would be spliced into SQL
+// column positions by the datasource adapters.
+func validateRowCols(data map[string]interface{}) error {
+	for k := range data {
+		if !safeColName.MatchString(k) {
+			return fmt.Errorf("非法列名: %s", k)
+		}
+	}
+	return nil
 }
 
 // CheckProjectView returns true if the request's user can VIEW the project:
@@ -426,6 +440,7 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if table == "" || pkCol == "" || pkVal == "" { auth.JSONErr(w, 400, "缺少table/pk/pkval参数"); return }
 	var row map[string]interface{}
 	json.NewDecoder(r.Body).Decode(&row)
+	if err := validateRowCols(row); err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.UpdateItem(table, pkCol, pkVal, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
@@ -456,6 +471,7 @@ func InsertTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if table == "" { auth.JSONErr(w, 400, "缺少table参数"); return }
 	var row map[string]interface{}
 	json.NewDecoder(r.Body).Decode(&row)
+	if err := validateRowCols(row); err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.InsertItem(table, row); err != nil { auth.JSONErr(w, 500, err.Error()); return }
