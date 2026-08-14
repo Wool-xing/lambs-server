@@ -521,41 +521,40 @@ func (pm *ProcManager) HealthMonitor(enabled func() bool) {
 		if !enabled() {
 			continue
 		}
-		rows, err := db.DB.Query("SELECT id, name, service_name FROM projects WHERE status='online' AND service_name IS NOT NULL AND service_name != ''")
+		rows, err := db.DB.Query("SELECT id, name FROM projects WHERE status='online'")
 		if err != nil {
 			continue
 		}
-		type entry struct{ id, name, svc string }
+		type entry struct{ id, name string }
 		var projects []entry
 		for rows.Next() {
 			var e entry
-			rows.Scan(&e.id, &e.name, &e.svc)
+			rows.Scan(&e.id, &e.name)
 			projects = append(projects, e)
 		}
 		rows.Close()
 		for _, p := range projects {
 			st := pm.Status(p.id)
-			if running, _ := st["running"].(bool); !running {
-				if starting, _ := st["starting"].(bool); starting {
-					continue // still initializing, skip this cycle
-				}
-				// Check systemctl if it is a systemd-managed service
-				if p.svc != "" {
-					out, _ := exec.Command("systemctl", "is-active", p.svc+".service").Output()
-					if strings.TrimSpace(string(out)) == "active" {
-						continue // systemd says it is running, skip
-					}
-				}
-				log.Printf("health: %s (%s) is down, restarting", p.name, p.id)
-				if err := pm.Start(p.id); err != nil {
-					log.Printf("health: %s restart failed: %v", p.name, err)
-					nid := fmt.Sprintf("n%d", time.Now().UnixNano())
-					db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "alert", "进程异常", fmt.Sprintf("「%s」进程意外退出，自动重启失败: %v", p.name, err))
+			if running, _ := st["running"].(bool); running {
+				continue
+			}
+			if starting, _ := st["starting"].(bool); starting {
+				continue // still initializing, skip this cycle
+			}
+			log.Printf("health: %s (%s) is down, restarting", p.name, p.id)
+			if err := pm.Start(p.id); err != nil {
+				// Projects with no startup_command/service_name are pure
+				// datasources — nothing to restart, no alarm needed.
+				if strings.Contains(err.Error(), "no service_name") {
 					continue
 				}
+				log.Printf("health: %s restart failed: %v", p.name, err)
 				nid := fmt.Sprintf("n%d", time.Now().UnixNano())
-				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "info", "进程恢复", fmt.Sprintf("「%s」进程已自动重启", p.name))
+				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "alert", "进程异常", fmt.Sprintf("「%s」进程意外退出，自动重启失败: %v", p.name, err))
+				continue
 			}
+			nid := fmt.Sprintf("n%d", time.Now().UnixNano())
+			db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "info", "进程恢复", fmt.Sprintf("「%s」进程已自动重启", p.name))
 		}
 		// Shared services: referenced (refs>0) but not running → restart.
 		pm.mu.RLock()

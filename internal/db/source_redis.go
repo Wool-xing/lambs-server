@@ -18,6 +18,20 @@ type RedisSource struct {
 	dsn string
 }
 
+// validateKey allows the characters legal in Redis keys (SQL table-name
+// rules do not apply — keys routinely contain dashes, colons, dots).
+func validateKey(k string) error {
+	if k == "" {
+		return fmt.Errorf("invalid key")
+	}
+	for _, c := range k {
+		if c <= 32 || c == '"' || c == '\'' || c == '\\' {
+			return fmt.Errorf("invalid key character")
+		}
+	}
+	return nil
+}
+
 func (s *RedisSource) client() (*redis.Client, error) {
 	u, err := url.Parse(s.dsn)
 	if err != nil {
@@ -65,7 +79,7 @@ func (s *RedisSource) keyType(ctx context.Context, c *redis.Client, key string) 
 }
 
 func (s *RedisSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
-	if err := validateTable(collection); err != nil {
+	if err := validateKey(collection); err != nil {
 		return nil, nil, "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -127,7 +141,7 @@ func (s *RedisSource) ReadItems(collection string) ([]map[string]interface{}, []
 }
 
 func (s *RedisSource) InsertItem(collection string, data map[string]interface{}) error {
-	if err := validateTable(collection); err != nil {
+	if err := validateKey(collection); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -161,7 +175,7 @@ func (s *RedisSource) UpdateItem(collection, pkCol, pkVal string, data map[strin
 }
 
 func (s *RedisSource) DeleteItem(collection, pkCol, pkVal string) error {
-	if err := validateTable(collection); err != nil {
+	if err := validateKey(collection); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
