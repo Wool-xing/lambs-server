@@ -20,6 +20,7 @@ type procState struct {
 	port    int
 	started time.Time
 	logFile *os.File
+	done    chan struct{} // closed by the single Wait goroutine when the process exits
 }
 
 type cpuSample struct {
@@ -37,6 +38,8 @@ type svcState struct {
 	refs     map[string]bool // projectID -> true (only online projects count)
 	cmd      *exec.Cmd       // direct-run process (bash -c startCmd)
 	logFile  *os.File
+	done     chan struct{} // closed by the single Wait goroutine when the process exits
+	starting bool          // launch in flight — guards against double start
 }
 
 type ProcManager struct {
@@ -57,6 +60,17 @@ func init() {
 			clockTicks = v
 		}
 	}
+}
+
+// minFreeMB returns the startup memory gate threshold in MB.
+// Default 100; overridable via LAMBS_MIN_FREE_MB for tuning and testing.
+func minFreeMB() int {
+	if v := os.Getenv("LAMBS_MIN_FREE_MB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 100
 }
 
 // memAvailableMB reads MemAvailable from /proc/meminfo, or returns 0 on error.
@@ -88,7 +102,7 @@ func (pm *ProcManager) Start(projectID string) error {
 	}
 	// Memory gate: refuse to start another process when the box is nearly
 	// out of memory — a new process under pressure would OOM the whole host.
-	if avail, err := memAvailableMB(); err == nil && avail < 100 {
+	if avail, err := memAvailableMB(); err == nil && avail < minFreeMB() {
 		return fmt.Errorf("可用内存不足（%dMB），拒绝启动以避免拖垮整机", avail)
 	}
 	var svcName, portStr, startCmd string
@@ -164,7 +178,8 @@ func (pm *ProcManager) Start(projectID string) error {
 		}
 		return fmt.Errorf("start %s: %w", svcName, err)
 	}
-	pm.procs[projectID] = &procState{cmd: cmd, port: port, started: time.Now(), logFile: lf}
+	done := make(chan struct{})
+	pm.procs[projectID] = &procState{cmd: cmd, port: port, started: time.Now(), logFile: lf, done: done}
 	go func() {
 		cmd.Wait()
 		pm.mu.Lock()
@@ -173,6 +188,7 @@ func (pm *ProcManager) Start(projectID string) error {
 		}
 		delete(pm.procs, projectID)
 		pm.mu.Unlock()
+		close(done)
 	}()
 	log.Printf("runtime: started %s (pid=%d, port=%d)", svcName, cmd.Process.Pid, port)
 	return nil
@@ -197,13 +213,12 @@ func (pm *ProcManager) Stop(projectID string) error {
 	}
 	pid := s.cmd.Process.Pid
 	lf := s.logFile
+	done := s.done
 	pm.mu.Unlock()
 	if lf != nil {
 		lf.Close()
 	}
 	syscall.Kill(-pid, syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { s.cmd.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -360,13 +375,18 @@ func (pm *ProcManager) AttachServices(projectID string) {
 		}
 		pm.mu.Lock()
 		st, ok := pm.services[name]
+		preLen := 0
+		if ok {
+			preLen = len(st.refs)
+		}
 		if !ok {
 			st = &svcState{name: name, startCmd: startCmd, stopCmd: stopCmd, refs: make(map[string]bool)}
 			pm.services[name] = st
 		}
 		st.refs[projectID] = true
-		first := len(st.refs) == 1
+		first := preLen == 0
 		pm.mu.Unlock()
+		log.Printf("runtime: attach service %s project=%s pre=%d post=%d first=%v", name, projectID, preLen, len(st.refs), first)
 		if first {
 			if err := pm.startShared(st); err != nil {
 				log.Printf("runtime: shared service %s start failed: %v", name, err)
@@ -397,6 +417,7 @@ func (pm *ProcManager) DetachServices(projectID string) {
 			delete(pm.services, name)
 		}
 		pm.mu.Unlock()
+		log.Printf("runtime: detach service %s project=%s refs=%d last=%v", name, projectID, len(st.refs), last)
 		if last {
 			pm.stopShared(st)
 		}
@@ -405,7 +426,17 @@ func (pm *ProcManager) DetachServices(projectID string) {
 
 // startShared launches the service command (bash -c), gated on free memory.
 func (pm *ProcManager) startShared(st *svcState) error {
-	if avail, err := memAvailableMB(); err == nil && avail < 100 {
+	pm.mu.Lock()
+	if st.starting || (st.cmd != nil && st.cmd.Process != nil) {
+		pm.mu.Unlock()
+		return nil // launch already in flight or running
+	}
+	st.starting = true
+	pm.mu.Unlock()
+	if avail, err := memAvailableMB(); err == nil && avail < minFreeMB() {
+		pm.mu.Lock()
+		st.starting = false
+		pm.mu.Unlock()
 		return fmt.Errorf("可用内存不足（%dMB），拒绝启动共享服务", avail)
 	}
 	logDir := "/home/ubuntu/apps/lambs-server/logs"
@@ -430,12 +461,16 @@ func (pm *ProcManager) startShared(st *svcState) error {
 		return err
 	}
 	st.cmd = cmd
+	done := make(chan struct{})
+	st.done = done
 	go func() {
 		cmd.Wait()
 		st.cmd = nil
+		st.starting = false
 		if lf != nil {
 			lf.Close()
 		}
+		close(done)
 	}()
 	log.Printf("runtime: shared service %s started (%s)", st.name, st.startCmd)
 	return nil
@@ -448,13 +483,13 @@ func (pm *ProcManager) stopShared(st *svcState) {
 		c.CombinedOutput()
 	}
 	if st.cmd != nil && st.cmd.Process != nil {
-		syscall.Kill(-st.cmd.Process.Pid, syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { st.cmd.Wait(); close(done) }()
+		pid := st.cmd.Process.Pid
+		done := st.done
+		syscall.Kill(-pid, syscall.SIGTERM)
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			syscall.Kill(-st.cmd.Process.Pid, syscall.SIGKILL)
+			syscall.Kill(-pid, syscall.SIGKILL)
 			<-done
 		}
 	}
