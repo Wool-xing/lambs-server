@@ -128,7 +128,7 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 				msg = l.Target + " — " + l.Detail
 			}
 			logs = append(logs, map[string]interface{}{
-				"project_name": uname, "level": "info",
+				"project_name": uname, "level": "info", "time": l.CreatedAt,
 				"message": fmt.Sprintf("[%s] %s", l.Action, msg),
 			})
 		}
@@ -145,7 +145,7 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 				lvl = "warn"
 			}
 			logs = append(logs, map[string]interface{}{
-				"project_name": name, "level": lvl,
+				"project_name": name, "level": lvl, "time": updated,
 				"message": fmt.Sprintf("状态: %s · 最后更新: %s", statusLabel, updated),
 			})
 		}
