@@ -1,15 +1,15 @@
 package gate
 
 import (
+	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
-
-	"encoding/json"
 )
 
 // HandleCheck verifies whether a path belongs to a blocked (offline/maintenance) project.
@@ -125,16 +125,16 @@ func HandleOfflinePage(w http.ResponseWriter, r *http.Request) {
 	cardBg := fmt.Sprintf("rgba(17,21,28,%.2f)", glassAlpha)
 
 	iconTag := ""
-	if icon != "" {
-		iconTag = fmt.Sprintf(`<img src="%s" alt="" class="logo">`, icon)
+	if icon != "" && strings.HasPrefix(icon, "data:image/") {
+		iconTag = fmt.Sprintf(`<img src="%s" alt="" class="logo">`, html.EscapeString(icon))
 	}
 	faviconTag := ""
-	if icon != "" {
-		faviconTag = fmt.Sprintf(`<link rel="icon" href="%s">`, icon)
+	if icon != "" && strings.HasPrefix(icon, "data:image/") {
+		faviconTag = fmt.Sprintf(`<link rel="icon" href="%s">`, html.EscapeString(icon))
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + name + `</title>` + faviconTag + `<style>
+	w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(name) + `</title>` + faviconTag + `<style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:` + bgGradient + `;color:#8B93A3}
 .card{display:flex;flex-direction:column;align-items:center;background:` + cardBg + `;backdrop-filter:blur(` + fmt.Sprintf("%d", glassBlur) + `px);-webkit-backdrop-filter:blur(` + fmt.Sprintf("%d", glassBlur) + `px);border:1px solid ` + border + `;border-radius:20px;padding:56px 64px;max-width:460px;width:90%;text-align:center;box-shadow:0 12px 48px rgba(0,0,0,.5)}
@@ -143,5 +143,5 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;fon
 h1{font-size:20px;font-weight:600;color:#E2E4E9;margin-bottom:8px}
 p{font-size:14px;color:#8B93A3;line-height:1.6;max-width:340px;margin:0 auto}
 .footer{margin-top:28px;font-size:11px;color:rgba(148,163,184,.3)}
-</style></head><body><div class="card">` + iconTag + `<div class="status">` + statusLabel + `</div><h1>` + name + `</h1><p>` + msg + `</p><div class="footer">Lambs 管理系统</div></div></body></html>`))
+</style></head><body><div class="card">` + iconTag + `<div class="status">` + html.EscapeString(statusLabel) + `</div><h1>` + html.EscapeString(name) + `</h1><p>` + html.EscapeString(msg) + `</p><div class="footer">Lambs 管理系统</div></div></body></html>`))
 }
