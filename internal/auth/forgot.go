@@ -29,6 +29,8 @@ func EnsureForgotSchema() {
 	)`)
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT ''`)
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`)
+	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`)
+	db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0`)
 }
 
 func randomCode() (string, error) {
@@ -107,11 +109,24 @@ func HandleForgotVerify(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 400, "新密码至少6位")
 		return
 	}
+	// Brute-force gate: at most 5 attempts per code before it must be re-issued.
+	const maxAttempts = 5
 	var id int64
-	err := db.DB.QueryRow("SELECT id FROM verification_codes WHERE username=$1 AND email=$2 AND code=$3 AND used=FALSE AND expires_at > NOW() ORDER BY id DESC LIMIT 1",
-		req.Username, req.Email, req.Code).Scan(&id)
+	var dbCode string
+	var attempts int
+	err := db.DB.QueryRow("SELECT id, code, COALESCE(attempts,0) FROM verification_codes WHERE username=$1 AND email=$2 AND used=FALSE AND expires_at > NOW() ORDER BY id DESC LIMIT 1",
+		req.Username, req.Email).Scan(&id, &dbCode, &attempts)
 	if err != nil {
 		JSONErr(w, 400, "验证码错误或已过期")
+		return
+	}
+	if attempts >= maxAttempts {
+		JSONErr(w, 400, "尝试次数过多，请重新获取验证码")
+		return
+	}
+	if dbCode != req.Code {
+		db.DB.Exec("UPDATE verification_codes SET attempts=attempts+1 WHERE id=$1", id)
+		JSONErr(w, 400, fmt.Sprintf("验证码错误，剩余 %d 次尝试", maxAttempts-attempts-1))
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.NewPassword)), bcrypt.DefaultCost)
@@ -119,7 +134,8 @@ func HandleForgotVerify(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 500, "密码处理失败")
 		return
 	}
-	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1 WHERE username=$2", string(hash), req.Username); err != nil {
+	// Bump token_version — every existing token for this account dies now.
+	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE username=$2", string(hash), req.Username); err != nil {
 		JSONErr(w, 500, err.Error())
 		return
 	}

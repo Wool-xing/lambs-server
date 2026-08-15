@@ -3,6 +3,8 @@ package auth
 import (
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,14 +17,34 @@ var loginLimiter = struct {
 	hits map[string][]time.Time
 }{hits: make(map[string][]time.Time)}
 
-// clientIP prefers the X-Forwarded-For set by nginx over the socket address.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
+// trustedProxies lists the reverse-proxy peers whose X-Forwarded-For may be
+// trusted. Configured via LAMBS_TRUSTED_PROXIES (comma-separated); defaults
+// to loopback only — the proxy address is deployment-specific and must never
+// be hardcoded. XFF from any other peer is ignored (spoofing defense).
+var trustedProxies = func() map[string]bool {
+	m := map[string]bool{"127.0.0.1": true, "::1": true}
+	for _, p := range strings.Split(os.Getenv("LAMBS_TRUSTED_PROXIES"), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			m[p] = true
+		}
 	}
+	return m
+}()
+
+// clientIP returns the real client address for rate limiting.
+func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if trustedProxies[host] {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// nginx appends to XFF; the right-most address is the direct peer.
+			parts := strings.Split(xff, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+				return last
+			}
+		}
 	}
 	return host
 }

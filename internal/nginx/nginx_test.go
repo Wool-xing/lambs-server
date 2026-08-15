@@ -8,6 +8,11 @@ import (
 )
 
 func TestBuildConfig(t *testing.T) {
+	// Deployment-specific gate address comes from env — tests inject their own.
+	oldGate := gateHost
+	gateHost = "10.0.0.9:3602"
+	defer func() { gateHost = oldGate }()
+
 	projects := []models.Project{
 		{Name: "QA质量", BasePath: "/QA_Test", Port: "3501", BackendURL: "http://127.0.0.1:3509"},
 		{Name: "无端口项目", BasePath: "/NoPort", Port: ""},
@@ -20,7 +25,7 @@ func TestBuildConfig(t *testing.T) {
 		"location = /lambs-gate-QA_Test",
 		"location /QA_Test/api/",
 		// Web1 must reach App1's TCPProxy, never the App1-local backend
-		"proxy_pass http://100.92.91.11:3501/",
+		"proxy_pass http://10.0.0.9:3501/",
 		"location /QA_Test {",
 	}
 	for _, s := range mustContain {

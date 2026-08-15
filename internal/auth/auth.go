@@ -79,10 +79,24 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		// deactivation take effect immediately instead of after token expiry.
 		// (db.DB is nil only in unit tests — they exercise the claims path.)
 		var dbRole, dbStatus string
+		var dbVer int
 		if db.DB != nil {
-			if err := db.DB.QueryRow("SELECT role, status FROM users WHERE id=$1", userID).Scan(&dbRole, &dbStatus); err == nil {
+			if err := db.DB.QueryRow("SELECT role, status, COALESCE(token_version,0) FROM users WHERE id=$1", userID).Scan(&dbRole, &dbStatus, &dbVer); err == nil {
 				if dbStatus != "active" {
 					JSONErr(w, 401, "账号已停用")
+					return
+				}
+				// Password change bumps token_version — tokens issued before
+				// it must die immediately, not after expiry.
+				claimVer := 0
+				if v, ok := mapClaims["tv"].(float64); ok {
+					claimVer = int(v)
+				} else {
+					JSONErr(w, 401, "token失效")
+					return
+				}
+				if claimVer != dbVer {
+					JSONErr(w, 401, "token失效")
 					return
 				}
 				role = dbRole
@@ -140,8 +154,9 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var avatarURL, lastLogin sql.NullString // don't need these for login
 	_ = avatarURL
 	_ = lastLogin
-	err := db.DB.QueryRow("SELECT id, username, name, email, password_hash, role, status FROM users WHERE username=$1",
-		req.Username).Scan(&user.ID, &user.Username, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.Status)
+	var tokenVer int
+	err := db.DB.QueryRow("SELECT id, username, name, email, password_hash, role, status, COALESCE(token_version,0) FROM users WHERE username=$1",
+		req.Username).Scan(&user.ID, &user.Username, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.Status, &tokenVer)
 	if err != nil {
 		JSONErr(w, 401, "用户名或密码错误")
 		return
@@ -164,6 +179,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		"user_id":  user.ID,
 		"username": user.Username,
 		"role":     user.Role,
+		"tv":       tokenVer,
 		"exp":      jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
 		"iat":      jwt.NewNumericDate(time.Now()),
 	}
@@ -234,6 +250,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		"user_id":  id,
 		"username": req.Username,
 		"role":     "viewer",
+		"tv":       0,
 		"exp":      jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
 		"iat":      jwt.NewNumericDate(time.Now()),
 	}
@@ -247,6 +264,45 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		"token_type":   "bearer",
 		"user":         map[string]interface{}{"id": id, "username": req.Username, "name": req.Username, "email": req.Email, "role": "viewer", "status": "active"},
 	})
+}
+
+// HandleMePassword lets a user change their own password (old password check,
+// token_version bump revokes every existing token including this one).
+func HandleMePassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONErr(w, 400, "无效请求")
+		return
+	}
+	if req.New == "" || len(req.New) < 6 {
+		JSONErr(w, 400, "新密码至少6位")
+		return
+	}
+	userID := r.Header.Get("X-User-ID")
+	var hash string
+	if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=$1", userID).Scan(&hash); err != nil {
+		JSONErr(w, 404, "用户不存在")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(sha256Hex(req.Old))) != nil {
+		JSONErr(w, 400, "原密码错误")
+		return
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.New)), bcrypt.DefaultCost)
+	if err != nil {
+		JSONErr(w, 500, "密码处理失败")
+		return
+	}
+	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(newHash), userID); err != nil {
+		JSONErr(w, 500, err.Error())
+		return
+	}
+	db.DB.Exec("INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ($1,$2,$3,$4,$5)",
+		userID, r.Header.Get("X-Username"), "修改密码", r.Header.Get("X-Username"), "用户自助修改密码")
+	JSONOK(w, map[string]string{"message": "密码已修改"})
 }
 
 func HandleMe(w http.ResponseWriter, r *http.Request) {

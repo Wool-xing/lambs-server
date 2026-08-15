@@ -475,6 +475,7 @@ func main() {
 	// Auth
 	mux.HandleFunc("GET /api/auth/me", a(auth.HandleMe))
 	mux.HandleFunc("GET /api/me", a(auth.HandleMe))
+	mux.HandleFunc("PUT /api/auth/me/password", a(auth.HandleMePassword))
 
 	// Projects
 	mux.HandleFunc("GET /api/projects", a(handlers.ListProjects))

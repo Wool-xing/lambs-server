@@ -114,7 +114,7 @@ func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
 	if req.NewPassword == "" { auth.JSONErr(w, 400, "请输入新密码"); return }
 	if len(req.NewPassword) < 6 { auth.JSONErr(w, 400, "新密码至少6位"); return }
 	hash, _ := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.NewPassword)), bcrypt.DefaultCost)
-	db.DB.Exec("UPDATE users SET password_hash=$1 WHERE id=$2", string(hash), id)
+	db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(hash), id)
 	var uname string
 	db.DB.QueryRow("SELECT username FROM users WHERE id=$1", id).Scan(&uname)
 	auditLog(r, "重置密码", uname, "管理员重置用户密码")
