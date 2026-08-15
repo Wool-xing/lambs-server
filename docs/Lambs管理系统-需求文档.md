@@ -49,10 +49,12 @@
 
 - JWT（8h）+ bcrypt(sha256(pwd)) 双层
 - **开放注册**：注册即 viewer + 空 project_access，超管授权后才能看项目；注册即自动登录
-- 忘记密码：用户名+邮箱验证 → 6 位码邮件（60s 冷却 / 5 分钟过期 / 一次性）
+- 忘记密码：用户名+邮箱验证 → 6 位码邮件（60s 冷却 / 5 分钟过期 / 一次性 / 每码最多 5 次尝试）
+- **改密即时失效**：users.token_version 版本号入 JWT，改密/重置/忘记密码 +1，旧 token 立即 401；自己改密走 PUT /api/auth/me/password（旧密码校验）
 - RBAC：super_admin / project_admin / viewer + project_access 项目级授权
 - 非超管：DSN / datasources / services 一律脱敏，写路径按角色拦截
 - 登录限流：nginx lambs_login 5r/m + Go 层内存限流 5r/min/IP（直连 :3602 双保险）
+- **XFF 信任链**：仅信任 LAMBS_TRUSTED_PROXIES 列表（部署 env，默认本机），其余来源忽略 XFF 防轮换绕过
 - 角色/停号变更即时生效（每请求查库，非等 token 过期）
 
 ### 2.5 备份

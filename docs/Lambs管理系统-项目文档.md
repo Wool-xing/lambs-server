@@ -140,6 +140,7 @@ go-server: go test ./...（Windows 可跑，平台层已拆分）
 
 ### 关键配置
 - App1: lambs_config.json（runtime_enabled=true 自愈开）、.env（DATABASE_URL/JWT_SECRET）
+- systemd unit Environment：`LAMBS_TRUSTED_PROXIES`（可信反代 IP）、`WEB1_SSH_HOST`（nginx 推送目标）、`GATE_HOST`（闸门地址 <ip>:3602）——部署相关地址一律 env，代码零硬编码
 - 共享服务单元必须 disabled（防重启常驻），由 Lambs 按计数拉
 - LAMBS_MIN_FREE_MB 可调内存门控阈值（默认 100MB）
 - nginx: lambs_login 5r/m 登录限流、lambs-managed.conf 自动生成
