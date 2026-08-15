@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -33,7 +34,7 @@ func ListUsers(w http.ResponseWriter, r *http.Request) {
 	if roleFilter != "" && roleFilter != "all" { argIdx++; if roleFilter == "viewer" { query += " AND (role=$" + strconv.Itoa(argIdx) + " OR role IS NULL OR role='')" } else { query += " AND role=$" + strconv.Itoa(argIdx) }; args = append(args, roleFilter) }
 	query += " ORDER BY created_at DESC"
 	rows, err := db.DB.Query(query, args...)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if err != nil { log.Printf("ListUsers: %v", err); auth.JSONErr(w, 500, "查询用户失败"); return }
 	defer rows.Close()
 	users := []models.User{}
 	for rows.Next() {
@@ -49,10 +50,11 @@ func ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	if users == nil { users = []models.User{} }
 	var all, super, projAdmin, viewer int
-	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&all)
-	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='super_admin'").Scan(&super)
-	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='project_admin'").Scan(&projAdmin)
-	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='viewer' OR role IS NULL OR role=''").Scan(&viewer)
+	db.DB.QueryRow(`SELECT COUNT(*),
+		COUNT(*) FILTER (WHERE role='super_admin'),
+		COUNT(*) FILTER (WHERE role='project_admin'),
+		COUNT(*) FILTER (WHERE role='viewer' OR role IS NULL OR role='')
+		FROM users`).Scan(&all, &super, &projAdmin, &viewer)
 	auth.JSONOK(w, map[string]interface{}{"users": users, "counts": map[string]int{"all": all, "super_admin": super, "project_admin": projAdmin, "viewer": viewer}, "total": len(users), "page": 1, "page_size": len(users)})
 }
 
@@ -80,7 +82,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte(sha256Hex(pwd)), bcrypt.DefaultCost)
 	u := models.User{Username: req.Username, Name: req.Name, Email: req.Email, Role: req.Role, ProjectAccess: req.ProjectAccess, AvatarURL: req.AvatarURL}
 	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
-	av := u.AvatarURL; if av == "" { av = "null" }
+	av := u.AvatarURL; if av == "" { av = "" }
 	avThumb := ""
 	if u.AvatarURL != "" {
 		if t, err := makeThumb(u.AvatarURL, 128); err == nil && t != u.AvatarURL {
@@ -111,22 +113,31 @@ func UpdateUser(w http.ResponseWriter, r *http.Request, id string) {
 	if u.Role != "super_admin" && u.Role != "project_admin" && u.Role != "viewer" { auth.JSONErr(w, 400, "角色不合法"); return }
 	if u.Status != "active" && u.Status != "disabled" { auth.JSONErr(w, 400, "状态不合法"); return }
 	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
-	av := u.AvatarURL; if av == "" { av = "null" }
+	av := u.AvatarURL; if av == "" { av = "" }
 	avThumb := ""
 	if strings.HasPrefix(u.AvatarURL, "data:") {
 		if t, err := makeThumb(u.AvatarURL, 128); err == nil && t != u.AvatarURL {
 			avThumb = t
 		}
 	}
-	db.DB.Exec("UPDATE users SET username=$1, name=$2, email=$3, role=$4, status=$5, project_access=$6::jsonb, avatar_url=$7, avatar_thumb=COALESCE(NULLIF($8,''), avatar_thumb) WHERE id=$9", u.Username, u.Name, u.Email, u.Role, u.Status, pa, av, avThumb, id)
+	if _, err := db.DB.Exec("UPDATE users SET username=$1, name=$2, email=$3, role=$4, status=$5, project_access=$6::jsonb, avatar_url=$7, avatar_thumb=CASE WHEN $7='' THEN '' ELSE COALESCE(NULLIF($8,''), avatar_thumb) END WHERE id=$9", u.Username, u.Name, u.Email, u.Role, u.Status, pa, av, avThumb, id); err != nil {
+		auth.JSONErr(w, 400, "修改失败: 用户名可能已存在")
+		return
+	}
 	auditLog(r, "修改用户", u.Username, fmt.Sprintf("role=%s status=%s", u.Role, u.Status))
 	auth.JSONOK(w, map[string]string{"updated": id})
 }
 
 func DeleteUser(w http.ResponseWriter, r *http.Request, id string) {
 	var uname string
-	db.DB.QueryRow("SELECT username FROM users WHERE id=$1", id).Scan(&uname)
-	db.DB.Exec("DELETE FROM users WHERE id=$1", id)
+	if err := db.DB.QueryRow("SELECT username FROM users WHERE id=$1", id).Scan(&uname); err != nil {
+		auth.JSONErr(w, 404, "用户不存在")
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM users WHERE id=$1", id); err != nil {
+		auth.JSONErr(w, 500, "删除失败")
+		return
+	}
 	auditLog(r, "删除用户", uname, "用户账号已删除")
 	auth.JSONOK(w, map[string]string{"deleted": id})
 }
@@ -137,7 +148,10 @@ func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
 	if req.NewPassword == "" { auth.JSONErr(w, 400, "请输入新密码"); return }
 	if len(req.NewPassword) < 6 { auth.JSONErr(w, 400, "新密码至少6位"); return }
 	hash, _ := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.NewPassword)), bcrypt.DefaultCost)
-	db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(hash), id)
+	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(hash), id); err != nil {
+		auth.JSONErr(w, 500, "重置失败")
+		return
+	}
 	var uname string
 	db.DB.QueryRow("SELECT username FROM users WHERE id=$1", id).Scan(&uname)
 	auditLog(r, "重置密码", uname, "管理员重置用户密码")

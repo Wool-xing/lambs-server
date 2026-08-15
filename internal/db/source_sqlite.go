@@ -91,7 +91,7 @@ func (s *SQLiteSource) ReadItems(collection string, limit, offset int) ([]map[st
 		for i, c := range cols {
 			quotedCols[i] = fmt.Sprintf("\"%s\"", c)
 		}
-		paging := ""
+		paging := " LIMIT 500"
 		if limit > 0 {
 			paging = fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 		}

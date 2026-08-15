@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -100,9 +101,13 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 					return
 				}
 				role = dbRole
+			} else {
+				// Fail-closed: DB unreachable or user row missing — do not
+				// trust JWT claims. Revoked users must never pass through.
+				JSONErr(w, 401, "认证校验失败")
+				return
 			}
 		}
-		// On DB errors keep claim values (graceful degradation).
 		r.Header.Set("X-User-ID", userID)
 		r.Header.Set("X-Username", username)
 		r.Header.Set("X-Role", role)
@@ -297,7 +302,8 @@ func HandleMePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(newHash), userID); err != nil {
-		JSONErr(w, 500, err.Error())
+		log.Printf("ChangePassword: %v", err)
+		JSONErr(w, 500, "重置密码失败")
 		return
 	}
 	db.DB.Exec("INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ($1,$2,$3,$4,$5)",

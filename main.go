@@ -397,10 +397,10 @@ func main() {
 	defer db.DB.Close()
 	auth.EnsureForgotSchema()
 	// Thumbnail columns + backfill for legacy rows (logo/avatar base64).
-	go func() {
-		time.Sleep(5 * time.Second)
-		handlers.EnsureThumbs()
-	}()
+	// Run synchronously before the listener starts: a 5s-delayed ALTER left
+	// a window where the first requests hit a users table without the
+	// avatar_thumb column and ListUsers silently returned empty rows.
+	handlers.EnsureThumbs()
 
 	if lambsConfig.RuntimeBase == "" {
 		lambsConfig.RuntimeBase = "/home/ubuntu/apps"

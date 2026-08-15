@@ -12,7 +12,11 @@ type PostgresSource struct {
 }
 
 func (s *PostgresSource) normDSN() string {
-	return strings.Replace(s.dsn, "postgresql+asyncpg://", "postgres://", 1) + "?connect_timeout=5"
+	dsn := strings.Replace(s.dsn, "postgresql+asyncpg://", "postgres://", 1)
+	if strings.Contains(dsn, "?") {
+		return dsn + "&connect_timeout=5"
+	}
+	return dsn + "?connect_timeout=5"
 }
 
 func (s *PostgresSource) ListCollections() ([]string, error) {
@@ -53,8 +57,10 @@ func (s *PostgresSource) ReadItems(collection string, limit, offset int) ([]map[
 		query := fmt.Sprintf("SELECT * FROM %s", t)
 		args := []interface{}{}
 		if limit > 0 {
-			query += " LIMIT $2 OFFSET $3"
+			query += " LIMIT $1 OFFSET $2"
 			args = append(args, limit, offset)
+		} else {
+			query += " LIMIT 500"
 		}
 		rows, err := tdb.Query(query, args...)
 		if err != nil {

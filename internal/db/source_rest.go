@@ -104,9 +104,24 @@ func (s *RESTSource) ReadItems(collection string, limit, offset int) ([]map[stri
 	}
 	cols := make([]string, 0, len(colSet))
 	for c := range colSet {
+		// Same column redaction as the SQL sources: never expose
+		// password/token columns through the data browser.
+		if strings.Contains(strings.ToLower(c), "password") || strings.Contains(strings.ToLower(c), "token") {
+			continue
+		}
 		cols = append(cols, c)
 	}
 	if rows == nil {
+		rows = []map[string]interface{}{}
+	}
+	// Client-side paging: the REST API has no server-side pagination contract.
+	if limit > 0 && offset < len(rows) {
+		end := offset + limit
+		if end > len(rows) {
+			end = len(rows)
+		}
+		rows = rows[offset:end]
+	} else if limit > 0 {
 		rows = []map[string]interface{}{}
 	}
 	// Honest pk detection: only claim "id" when rows actually carry it.
@@ -164,4 +179,6 @@ func (s *RESTSource) DeleteItem(collection, pkCol, pkVal string) error {
 	return nil
 }
 
-func (s *RESTSource) CountItems(collection string) (int, error) { return 0, nil }
+func (s *RESTSource) CountItems(collection string) (int, error) {
+	return 0, fmt.Errorf("rest source has no count endpoint")
+}

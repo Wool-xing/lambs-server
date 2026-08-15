@@ -63,7 +63,11 @@ func ExportProjects(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"ID", "Name", "Status", "Database", "Users"})
-	rows, _ := db.DB.Query("SELECT id, name, status, db_type, users_count FROM projects")
+	rows, err := db.DB.Query("SELECT id, name, status, db_type, users_count FROM projects")
+	if err != nil {
+		auth.JSONErr(w, 500, "导出失败")
+		return
+	}
 	defer rows.Close()
 	for rows.Next() { var id, name, status, dbType string; var users int; rows.Scan(&id, &name, &status, &dbType, &users); cw.Write([]string{id, name, status, dbType, strconv.Itoa(users)}) }
 	cw.Flush()
@@ -75,7 +79,11 @@ func ExportUsers(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"ID", "Username", "Name", "Email", "Role", "Status"})
-	rows, _ := db.DB.Query("SELECT id, username, name, email, role, status FROM users")
+	rows, err := db.DB.Query("SELECT id, username, name, email, role, status FROM users")
+	if err != nil {
+		auth.JSONErr(w, 500, "导出失败")
+		return
+	}
 	defer rows.Close()
 	for rows.Next() { var u models.User; rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status); cw.Write([]string{u.ID, u.Username, u.Name, u.Email, u.Role, u.Status}) }
 	cw.Flush()
