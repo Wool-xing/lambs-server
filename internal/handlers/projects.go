@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -189,7 +191,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 	default: query += " ORDER BY is_pinned DESC, sort_order"
 	}
 	rows, err := db.DB.Query(query, args...)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if err != nil { log.Printf("ListProjects: %v", err); auth.JSONErr(w, 500, "查询项目失败"); return }
 	defer rows.Close()
 	projects := []models.Project{}
 	for rows.Next() {
@@ -211,6 +213,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 		if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 		if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 		if p.Tabs == nil { p.Tabs = []interface{}{} }
+		p.Tabs = redactTabs(p.Tabs)
 		if dsRaw.Valid { json.Unmarshal([]byte(dsRaw.String), &p.Datasources) }
 		if _, ok := p.Datasources.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Datasources.(string)), &arr); p.Datasources = arr }
 		if p.Datasources == nil { p.Datasources = []interface{}{} }
@@ -262,6 +265,7 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 	if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 	if p.Tabs == nil { p.Tabs = []interface{}{} }
+	p.Tabs = redactTabs(p.Tabs)
 	if dsRaw.Valid { json.Unmarshal([]byte(dsRaw.String), &p.Datasources) }
 	if _, ok := p.Datasources.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Datasources.(string)), &arr); p.Datasources = arr }
 	if p.Datasources == nil { p.Datasources = []interface{}{} }
@@ -439,7 +443,7 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, icon_thumb=COALESCE(NULLIF($4,''), icon_thumb), stack=$5, port=$6, db_type=$7, dsn=$8, backend_url=$9, service_name=$10, base_path=$11, tags=$12::jsonb, offline_msg=$13, startup_command=$14, health_url=$15, backup_interval_hours=$16, backup_retention_days=$17, datasources=$18::jsonb, services=$19::jsonb WHERE id=$20",
 		p.Name, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, dsJSON, svcJSON, id)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if err != nil { log.Printf("UpdateProject %s: %v", id, err); auth.JSONErr(w, 500, "更新项目失败"); return }
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"updated": id})
 }
@@ -454,7 +458,7 @@ func DeleteProject(w http.ResponseWriter, r *http.Request, id string) {
 	runtime.ProcMgr.DetachServices(id)
 	runtime.PortMgr.Free(id)
 	res, err := db.DB.Exec("DELETE FROM projects WHERE id=$1", id)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if err != nil { log.Printf("DeleteProject %s: %v", id, err); auth.JSONErr(w, 500, "删除项目失败"); return }
 	if n, _ := res.RowsAffected(); n == 0 { auth.JSONErr(w, 404, "项目不存在"); return }
 	auditLog(r, "删除项目", id, "项目及运行配置已删除")
 	go nginx.Sync()
@@ -545,6 +549,16 @@ func TestConnection(w http.ResponseWriter, r *http.Request, id string) {
 	if dsn, err = resolveDatasource(id, r.URL.Query().Get("ds"), dsn); err != nil {
 		auth.JSONErr(w, 400, err.Error())
 		return
+	}
+	if err := db.CheckDSNHost(dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
+	if healthURL != "" {
+		if err := db.CheckDSNHost(healthURL); err != nil {
+			auth.JSONErr(w, 400, err.Error())
+			return
+		}
 	}
 	auth.JSONOK(w, db.TestHealth(dsn, healthURL))
 }
@@ -649,7 +663,7 @@ func VectorSearch(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	hits, err := vs.Search(req.Collection, req.Vector, req.TopK)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if err != nil { log.Printf("VectorSearch %s: %v", req.Collection, err); auth.JSONErr(w, 500, "向量检索失败"); return }
 	auth.JSONOK(w, map[string]interface{}{"hits": hits, "count": len(hits)})
 }
 
@@ -663,24 +677,107 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	table := r.URL.Query().Get("table")
+	if err := db.CheckDSNHost(dsn); err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
-	// Pagination: page/page_size query params. Absent = full read (legacy).
+	// Pagination: page/page_size query params. Absent = capped read (500 rows).
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	limit, offset := 0, 0
 	if page > 0 && pageSize > 0 {
+		if pageSize > 500 {
+			pageSize = 500
+		}
+		if page > 1000000 {
+			page = 1000000
+		}
 		limit, offset = pageSize, (page-1)*pageSize
+	}
+	search := r.URL.Query().Get("search")
+	sortCol := r.URL.Query().Get("sort_col")
+	var total int
+	// With search/sort active, fetch the capped window (limit==0 → 500),
+	// filter+sort in memory, then paginate — so the result is consistent
+	// across every data source type.
+	if search != "" || sortCol != "" {
+		limit, offset = 0, 0
 	}
 	data, cols, pk, err := src.ReadItems(table, limit, offset)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	// Single-point redaction: never expose password/token values through the
+	// data browser, regardless of data source (REST/Mongo/Redis rows were
+	// previously returned unfiltered).
+	data = db.RedactSensitive(data)
+	cols = db.RedactSensitiveCols(cols)
+	if search != "" {
+		q := strings.ToLower(strings.TrimSpace(search))
+		filtered := make([]map[string]interface{}, 0, len(data))
+		for _, row := range data {
+			match := false
+			for _, c := range cols {
+				if strings.Contains(strings.ToLower(fmt.Sprintf("%v", row[c])), q) {
+					match = true
+					break
+				}
+			}
+			if match {
+				filtered = append(filtered, row)
+			}
+		}
+		data = filtered
+	}
+	if sortCol != "" {
+		dir := strings.ToLower(r.URL.Query().Get("sort_dir"))
+		if dir != "desc" {
+			dir = "asc"
+		}
+		for _, c := range cols {
+			if c == sortCol {
+				sort.SliceStable(data, func(i, j int) bool {
+					a := strings.ToLower(fmt.Sprintf("%v", data[i][sortCol]))
+					b := strings.ToLower(fmt.Sprintf("%v", data[j][sortCol]))
+					if dir == "asc" {
+						return a < b
+					}
+					return a > b
+				})
+				break
+			}
+		}
+	}
+	if search != "" || sortCol != "" {
+		// Re-paginate the in-memory result.
+		total = len(data)
+		if page > 0 && pageSize > 0 {
+			start := (page - 1) * pageSize
+			if start > len(data) {
+				start = len(data)
+			}
+			end := start + pageSize
+			if end > len(data) {
+				end = len(data)
+			}
+			data = data[start:end]
+		}
+	}
 	if r.URL.Query().Get("format") == "csv" {
 		exportCSV(w, id+"_"+table, cols, data)
 		return
 	}
 	actualTable := table
 	if actualTable == "" && len(cols) > 0 { actualTable = "users" }
-	total, _ := src.CountItems(table)
+	if search == "" && sortCol == "" {
+		var cerr error
+		total, cerr = src.CountItems(table)
+		if cerr != nil {
+			// Sources without a count endpoint: fall back to the rows we
+			// have, so the frontend can still page instead of total=0.
+			total = len(data)
+		}
+	}
 	auth.JSONOK(w, map[string]interface{}{"columns": cols, "rows": data, "table": actualTable, "pk": pk, "total": total, "page": page, "page_size": pageSize})
 }
 
@@ -711,6 +808,9 @@ func refreshTabsSnapshot(projectID, table, dsn string) {
 	if err != nil { return }
 	rows, cols, pk, err := src.ReadItems(table, 0, 0)
 	if err != nil { return }
+	// Same redaction as the data browser: tabs are served back to viewers.
+	rows = db.RedactSensitive(rows)
+	cols = db.RedactSensitiveCols(cols)
 	var tabRows [][]interface{}
 	for _, r := range rows {
 		arr := make([]interface{}, len(cols))
@@ -840,7 +940,7 @@ func exportCSV(w http.ResponseWriter, filename string, cols []string, rows []map
 
 func ProjectMembers(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectView(r, id) { auth.JSONErr(w, 403, "无权限访问该项目"); return }
-	rows, err := db.DB.Query("SELECT u.id, u.username, u.name, u.email, u.role, u.status, COALESCE(u.avatar_url::text,'') FROM users u WHERE u.project_access::text LIKE '%' || $1 || '%' OR u.role='super_admin'", id)
+	rows, err := db.DB.Query("SELECT u.id, u.username, u.name, u.email, u.role, u.status, COALESCE(u.avatar_url::text,'') FROM users u WHERE u.project_access @> to_jsonb($1::text) OR u.role='super_admin'", id)
 	if err != nil { auth.JSONOK(w, map[string]interface{}{"members": []models.User{}, "non_members": []models.User{}}); return }
 	defer rows.Close()
 	members := []models.User{}

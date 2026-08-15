@@ -86,6 +86,8 @@ func (s *MySQLSource) ReadItems(collection string, limit, offset int) ([]map[str
 		query := fmt.Sprintf("SELECT * FROM `%s`", t)
 		if limit > 0 {
 			query += fmt.Sprintf(" LIMIT %d, %d", offset, limit)
+		} else {
+			query += " LIMIT 500"
 		}
 		rows, err := tdb.Query(query)
 		if err != nil {

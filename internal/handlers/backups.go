@@ -37,7 +37,8 @@ func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 	entries, _ := os.ReadDir(dir)
 	files := []map[string]interface{}{}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), id) {
+		// Exact project match: "app" must not list "app2_*" backups.
+		if e.Name() == id || strings.HasPrefix(e.Name(), id+"_") {
 			info, _ := e.Info()
 			files = append(files, map[string]interface{}{"filename": e.Name(), "size_mb": float64(info.Size()) / (1024 * 1024), "created": info.ModTime().Format("2006-01-02 15:04")})
 		}
@@ -48,8 +49,10 @@ func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 func safeBackupPath(id, filename string) (string, error) {
 	baseDir := "/home/ubuntu/lambs-backups"
 	clean := filepath.Clean(filepath.Join(baseDir, filename))
-	// Must be within baseDir and filename must start with project id
-	if !strings.HasPrefix(clean, baseDir+"/") || !strings.HasPrefix(filepath.Base(clean), id) {
+	// Must be within baseDir and filename must belong to this project
+	// ("app" must not reach "app2_*" backups).
+	base := filepath.Base(clean)
+	if !strings.HasPrefix(clean, baseDir+"/") || (base != id && !strings.HasPrefix(base, id+"_")) {
 		return "", fmt.Errorf("invalid path")
 	}
 	return clean, nil

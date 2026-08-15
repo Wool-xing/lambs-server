@@ -145,6 +145,16 @@ func (s *RedisSource) ReadItems(collection string, limit, offset int) ([]map[str
 	if rows == nil {
 		rows = []map[string]interface{}{}
 	}
+	// Client-side paging: Redis reads expand the whole key; slice what we show.
+	if limit > 0 && offset < len(rows) {
+		end := offset + limit
+		if end > len(rows) {
+			end = len(rows)
+		}
+		rows = rows[offset:end]
+	} else if limit > 0 {
+		rows = []map[string]interface{}{}
+	}
 	return rows, []string{"key", "type", "value", "field", "member", "score", "index"}, "key", nil
 }
 
@@ -206,4 +216,6 @@ func str(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
-func (s *RedisSource) CountItems(collection string) (int, error) { return 0, nil }
+func (s *RedisSource) CountItems(collection string) (int, error) {
+	return 0, fmt.Errorf("redis source has no row count")
+}

@@ -104,9 +104,9 @@ func (s *MongoSource) ReadItems(collection string, limit, offset int) ([]map[str
 		return nil, nil, "", err
 	}
 	defer client.Disconnect(ctx)
-	findOpts := options.Find().SetLimit(200)
+	findOpts := options.Find().SetLimit(200).SetSort(bson.D{{Key: "_id", Value: 1}})
 	if limit > 0 {
-		findOpts = options.Find().SetLimit(int64(limit)).SetSkip(int64(offset))
+		findOpts = options.Find().SetLimit(int64(limit)).SetSkip(int64(offset)).SetSort(bson.D{{Key: "_id", Value: 1}})
 	}
 	cursor, err := db.Collection(collection).Find(ctx, bson.D{}, findOpts)
 	if err != nil {

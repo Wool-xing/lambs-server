@@ -258,4 +258,6 @@ func (s *VectorSource) Search(collection string, vector []float64, topK int) ([]
 	return hits, nil
 }
 
-func (s *VectorSource) CountItems(collection string) (int, error) { return 0, nil }
+func (s *VectorSource) CountItems(collection string) (int, error) {
+	return 0, fmt.Errorf("vector source has no row count")
+}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -95,5 +96,52 @@ func TestTagsJSONRoundTrip(t *testing.T) {
 	}
 	if _, ok := arr[0].(string); !ok {
 		t.Fatalf("tags element not string: %v", arr[0])
+	}
+}
+
+func TestRedactTabs(t *testing.T) {
+	tabs := []interface{}{
+		map[string]interface{}{
+			"name": "users",
+			"cols": []interface{}{"id", "password", "name"},
+			"rows": []interface{}{
+				[]interface{}{1.0, "secret", "alice"},
+				[]interface{}{2.0, "secret2", "bob"},
+			},
+			"pk": "id",
+		},
+		map[string]interface{}{
+			"name": "clean",
+			"cols": []interface{}{"id", "name"},
+			"rows": []interface{}{[]interface{}{1.0, "x"}},
+			"pk":   "id",
+		},
+	}
+	got := redactTabs(tabs)
+	out := got.([]interface{})
+	// sensitive column stripped from first tab
+	t0 := out[0].(map[string]interface{})
+	cols := t0["cols"].([]interface{})
+	if len(cols) != 2 || cols[0] != "id" || cols[1] != "name" {
+		t.Fatalf("cols not redacted: %v", cols)
+	}
+	row0 := t0["rows"].([]interface{})[0].([]interface{})
+	if len(row0) != 2 || row0[0] != 1.0 || row0[1] != "alice" {
+		t.Fatalf("row not aligned to redacted cols: %v", row0)
+	}
+	if t0["pk"] != "id" {
+		t.Fatalf("pk lost: %v", t0["pk"])
+	}
+	// clean tab passes through with content intact
+	if !reflect.DeepEqual(out[1], tabs[1]) {
+		t.Fatal("clean tab content changed; no-redaction path should pass through")
+	}
+	// input not mutated
+	if len(tabs[0].(map[string]interface{})["cols"].([]interface{})) != 3 {
+		t.Fatal("input tabs were mutated")
+	}
+	// non-slice input passes through
+	if redactTabs("not-a-slice") != "not-a-slice" {
+		t.Fatal("non-slice input should pass through unchanged")
 	}
 }

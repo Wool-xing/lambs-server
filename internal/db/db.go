@@ -58,6 +58,9 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 	if dsn == "" || dsn == "—" {
 		return map[string]interface{}{"reachable": false, "error": "未配置数据源"}
 	}
+	if err := CheckDSNHost(dsn); err != nil {
+		return map[string]interface{}{"reachable": false, "error": err.Error()}
+	}
 	if strings.HasPrefix(dsn, "http") {
 		resp, err := httpClient.Get(dsn)
 		if err != nil {

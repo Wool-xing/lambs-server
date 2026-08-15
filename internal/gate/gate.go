@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 
+	"lambs-server-go/internal/handlers"
+
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
 )
@@ -55,16 +57,16 @@ func HandleProjectLogo(w http.ResponseWriter, r *http.Request) {
 	db.DB.QueryRow("SELECT COALESCE(icon_url,'') FROM projects WHERE base_path=$1 OR base_path=$2",
 		path, strings.TrimPrefix(path, "/")).Scan(&iconURL)
 	if iconURL != "" {
-		ct := "image/svg+xml"
-		if strings.HasPrefix(iconURL, "data:") {
-			if i := strings.Index(iconURL, ";"); i > 5 {
-				ct = iconURL[5:i]
+		raw, ct, ok := handlers.DataURLBytes(iconURL)
+		if ok {
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("Cache-Control", "public, max-age=120")
+			if ct == "image/svg+xml" {
+				w.Header().Set("Content-Security-Policy", "sandbox")
 			}
+			w.Write(raw)
+			return
 		}
-		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Cache-Control", "public, max-age=120")
-		w.Write([]byte(iconURL))
-		return
 	}
 	w.WriteHeader(404)
 }
@@ -74,8 +76,11 @@ func HandleOfflinePage(w http.ResponseWriter, r *http.Request) {
 	origURI := r.Header.Get("X-Original-URI")
 	path := strings.Split(strings.TrimPrefix(origURI, "/"), "/")[0]
 	var name, msg, icon, status string
-	db.DB.QueryRow("SELECT name, COALESCE(offline_msg,''), COALESCE(icon_url,''), status FROM projects WHERE base_path LIKE $1 LIMIT 1",
-		"/"+path+"%").Scan(&name, &msg, &icon, &status)
+	// Escape LIKE wildcards in the client-controlled path so a crafted
+	// X-Original-URI (e.g. "%_") cannot match another project's row.
+	escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(path)
+	db.DB.QueryRow("SELECT name, COALESCE(offline_msg,''), COALESCE(icon_url,''), status FROM projects WHERE base_path LIKE $1 ESCAPE '\\' LIMIT 1",
+		"/"+escaped+"%").Scan(&name, &msg, &icon, &status)
 	if name == "" {
 		name = "Project"
 		msg = "该项目当前不可用"

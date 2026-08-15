@@ -3,11 +3,13 @@ package handlers
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	_ "image/gif"
 	"image/jpeg"
 	"image/png"
+	"log"
 	"net/http"
 	"strings"
 
@@ -31,6 +33,13 @@ func makeThumb(dataURL string, maxSide int) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
 	if err != nil {
 		return "", err
+	}
+	// Size guard: reject absurd images before full decode (decompression
+	// bombs would otherwise consume hundreds of MB inside a request).
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(raw)); err == nil {
+		if cfg.Width > 4096 || cfg.Height > 4096 {
+			return "", fmt.Errorf("image too large: %dx%d", cfg.Width, cfg.Height)
+		}
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
@@ -126,6 +135,33 @@ func rgbaAt(src image.Image, x, y int) color.RGBA {
 	return color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(bl >> 8), uint8(a >> 8)}
 }
 
+// DataURLBytes decodes a data URL into raw image bytes. The media type is
+// whitelisted to image formats; anything else (e.g. text/html) is rejected.
+func DataURLBytes(data string) ([]byte, string, bool) {
+	if !strings.HasPrefix(data, "data:") {
+		return nil, "", false
+	}
+	semi := strings.Index(data, ";")
+	comma := strings.Index(data, ",")
+	if semi < 0 || comma < 0 || comma < semi {
+		return nil, "", false
+	}
+	ct := data[5:semi]
+	switch ct {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/svg+xml":
+	default:
+		return nil, "", false
+	}
+	if !strings.HasPrefix(data[semi+1:], "base64") {
+		return nil, "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(data[comma+1:])
+	if err != nil {
+		return nil, "", false
+	}
+	return raw, ct, true
+}
+
 // ProjectLogo serves a project icon as a plain image (public, cached).
 // ?full=1 returns the original, otherwise the 128px thumbnail. Image data
 // never rides inside JSON payloads — the browser fetches and caches it.
@@ -136,28 +172,38 @@ func ProjectLogo(w http.ResponseWriter, r *http.Request, id string) {
 	if r.URL.Query().Get("full") == "1" && icon != "" {
 		data = icon
 	}
-	if data == "" || !strings.HasPrefix(data, "data:") {
+	if data == "" {
+		data = icon // no thumb yet (SVG or already-small image) — serve the original
+	}
+	raw, ct, ok := DataURLBytes(data)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	ct := "image/png"
-	if i := strings.Index(data, ";"); i > 5 {
-		ct = data[5:i]
-	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Write([]byte(data))
+	if ct == "image/svg+xml" {
+		w.Header().Set("Content-Security-Policy", "sandbox")
+	}
+	w.Write(raw)
 }
 
 // EnsureThumbs adds thumb columns and backfills thumbnails for legacy rows
 // (rows created before thumbnails existed). Runs once at startup; new writes
 // generate thumbs inline in Create/Update handlers.
 func EnsureThumbs() {
-	db.DB.Exec(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS icon_thumb TEXT`)
-	db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_thumb TEXT`)
+	if _, err := db.DB.Exec(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS icon_thumb TEXT`); err != nil {
+		log.Printf("EnsureThumbs: projects alter failed: %v", err)
+		return
+	}
+	if _, err := db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_thumb TEXT`); err != nil {
+		log.Printf("EnsureThumbs: users alter failed: %v", err)
+		return
+	}
 
 	rows, err := db.DB.Query("SELECT id, COALESCE(icon_url,''), COALESCE(icon_thumb,'') FROM projects WHERE icon_url LIKE 'data:%' AND (icon_thumb IS NULL OR icon_thumb = '')")
 	if err != nil {
+		log.Printf("EnsureThumbs: query failed: %v", err)
 		return
 	}
 	type pair struct{ id, icon string }
@@ -165,13 +211,18 @@ func EnsureThumbs() {
 	for rows.Next() {
 		var p pair
 		var thumb string
-		rows.Scan(&p.id, &p.icon, &thumb)
+		if err := rows.Scan(&p.id, &p.icon, &thumb); err != nil {
+			log.Printf("EnsureThumbs: scan failed: %v", err)
+			continue
+		}
 		jobs = append(jobs, p)
 	}
 	rows.Close()
 	for _, p := range jobs {
 		if t, err := makeThumb(p.icon, 128); err == nil && t != p.icon {
-			db.DB.Exec("UPDATE projects SET icon_thumb=$1 WHERE id=$2", t, p.id)
+			if _, err := db.DB.Exec("UPDATE projects SET icon_thumb=$1 WHERE id=$2", t, p.id); err != nil {
+				log.Printf("EnsureThumbs: update %s failed: %v", p.id, err)
+			}
 		}
 	}
 

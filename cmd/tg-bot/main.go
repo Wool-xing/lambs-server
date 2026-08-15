@@ -365,7 +365,8 @@ func webhookServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		received := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
-		if webhookSecret != "" && received != webhookSecret {
+		// Fail-closed: without a configured secret, reject webhook calls.
+		if webhookSecret == "" || received != webhookSecret {
 			w.WriteHeader(403)
 			w.Write([]byte(`{"ok":false}`))
 			return
