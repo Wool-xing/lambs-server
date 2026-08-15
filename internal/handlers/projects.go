@@ -584,12 +584,12 @@ func ProjectStats(w http.ResponseWriter, r *http.Request) {
 	online := count("SELECT COUNT(*) FROM projects WHERE status='online'" + strings.Replace(where, "WHERE", "AND", 1), args...)
 	offline := count("SELECT COUNT(*) FROM projects WHERE status='offline'" + strings.Replace(where, "WHERE", "AND", 1), args...)
 	maintenance := count("SELECT COUNT(*) FROM projects WHERE status='maintenance'" + strings.Replace(where, "WHERE", "AND", 1), args...)
-	// users_count = synced end-user counts of managed projects; adding Lambs
-	// platform users to it was double counting. Report them separately.
+	// 卡片语义:"累计注册用户 = 覆盖所有项目"——Lambs 平台用户 + 被管项目
+	// 同步来的最终用户数之和。两者人群不同,不是重复计数。
 	var lambsUsers, projectUsers int
 	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&lambsUsers)
 	db.DB.QueryRow("SELECT COALESCE(SUM(users_count), 0) FROM projects" + where, args...).Scan(&projectUsers)
-	auth.JSONOK(w, map[string]int{"total_projects": total, "online": online, "offline": offline, "maintenance": maintenance, "total_users": lambsUsers, "project_users": projectUsers})
+	auth.JSONOK(w, map[string]int{"total_projects": total, "online": online, "offline": offline, "maintenance": maintenance, "total_users": lambsUsers + projectUsers, "project_users": projectUsers})
 }
 
 // VectorSearch runs a similarity search on a Qdrant datasource.
