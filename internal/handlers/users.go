@@ -36,7 +36,17 @@ func ListUsers(w http.ResponseWriter, r *http.Request) {
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	defer rows.Close()
 	users := []models.User{}
-	for rows.Next() { var u models.User; var pa, av, avThumb string; rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &pa, &av, &u.LastLogin); u.ProjectAccess = pa; if avThumb != "" { av = avThumb } else if len(av) > 64*1024 { av = "" }; u.AvatarURL = av; users = append(users, u) }
+	for rows.Next() {
+		var u models.User
+		var pa, av, avThumb string
+		if err := rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &pa, &av, &avThumb, &u.LastLogin); err != nil {
+			continue
+		}
+		u.ProjectAccess = pa
+		if avThumb != "" { av = avThumb } else if len(av) > 64*1024 { av = "" }
+		u.AvatarURL = av
+		users = append(users, u)
+	}
 	if users == nil { users = []models.User{} }
 	var all, super, projAdmin, viewer int
 	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&all)
