@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 var JWTKey []byte
 
 var corsOrigin = os.Getenv("CORS_ORIGIN")
+
+// usernameRe is the registration charset gate — blocks control chars and
+// HTML that would end up in audit logs and every list view.
+var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_.\-\p{Han}]+$`)
 
 func init() {
 	if corsOrigin == "" { corsOrigin = "https://wool.cc.cd" }
@@ -149,7 +154,9 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 401, "用户名或密码错误")
 		return
 	}
-	db.DB.Exec("UPDATE users SET last_login=$1 WHERE id=$2", time.Now().Format(time.RFC3339), user.ID)
+	// Store UTC — the column is timestamp WITHOUT time zone and the frontend
+	// formats as UTC+8. A local-time value gets the +8 applied twice.
+	db.DB.Exec("UPDATE users SET last_login=$1 WHERE id=$2", time.Now().UTC().Format(time.RFC3339), user.ID)
 	db.DB.Exec("INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ($1,$2,$3,$4,$5)",
 		user.ID, user.Username, "登录", user.Username, "登录成功")
 
@@ -194,6 +201,10 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.TrimSpace(req.Email)
 	if req.Username == "" || len(req.Username) > 64 {
 		JSONErr(w, 400, "用户名不能为空且不超过64位")
+		return
+	}
+	if !usernameRe.MatchString(req.Username) {
+		JSONErr(w, 400, "用户名仅支持字母、数字、下划线、点、连字符和中文")
 		return
 	}
 	if !strings.Contains(req.Email, "@") || !strings.Contains(strings.Split(req.Email, "@")[len(strings.Split(req.Email, "@"))-1], ".") {

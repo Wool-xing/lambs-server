@@ -66,6 +66,17 @@ func (tp *TCPProxy) Start(projectID string) error {
 }
 
 func (tp *TCPProxy) serve(projectID string, ln net.Listener, backend string, counter *int64) {
+	defer func() {
+		// Accept failed = this listener is dead. Leave it in the map and
+		// Start() would report "already running" forever.
+		tp.mu.Lock()
+		if tp.listeners[projectID] == ln {
+			delete(tp.listeners, projectID)
+			delete(tp.actives, projectID)
+		}
+		tp.mu.Unlock()
+		log.Printf("tcp-proxy: %s listener closed, removed from registry", projectID)
+	}()
 	for {
 		client, err := ln.Accept()
 		if err != nil {

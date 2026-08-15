@@ -212,12 +212,10 @@ func (pm *ProcManager) Stop(projectID string) error {
 		return nil
 	}
 	pid := s.cmd.Process.Pid
-	lf := s.logFile
 	done := s.done
 	pm.mu.Unlock()
-	if lf != nil {
-		lf.Close()
-	}
+	// logFile is closed by the Wait goroutine — closing it here too races on
+	// the fd (it may already be reused by another open).
 	killGroup(pid, syscall.SIGTERM)
 	select {
 	case <-done:
@@ -470,11 +468,13 @@ func (pm *ProcManager) startShared(st *svcState) error {
 	st.done = done
 	go func() {
 		cmd.Wait()
+		pm.mu.Lock()
 		st.cmd = nil
 		st.starting = false
 		if lf != nil {
 			lf.Close()
 		}
+		pm.mu.Unlock()
 		close(done)
 	}()
 	log.Printf("runtime: shared service %s started (%s)", st.name, st.startCmd)

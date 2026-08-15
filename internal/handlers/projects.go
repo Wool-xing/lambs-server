@@ -447,6 +447,12 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 	if current == "offline" { next = "maintenance" }
 	if current == "maintenance" { next = "online" }
 	if req.Status != "" { next = req.Status }
+	// Whitelist gate: arbitrary values would poison the three-state machine
+	// (status drives nginx gate, health monitor and process lifecycle).
+	if next != "online" && next != "offline" && next != "maintenance" {
+		auth.JSONErr(w, 400, "状态只能是 online/offline/maintenance")
+		return
+	}
 	db.DB.Exec("UPDATE projects SET status=$1, updated_at=NOW() WHERE id=$2", next, id)
 	var pname string
 	db.DB.QueryRow("SELECT name FROM projects WHERE id=$1", id).Scan(&pname)
@@ -547,15 +553,43 @@ func SyncProject(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func ProjectStats(w http.ResponseWriter, r *http.Request) {
-	var total, online, offline, maintenance int
-	db.DB.QueryRow("SELECT COUNT(*) FROM projects").Scan(&total)
-	db.DB.QueryRow("SELECT COUNT(*) FROM projects WHERE status='online'").Scan(&online)
-	db.DB.QueryRow("SELECT COUNT(*) FROM projects WHERE status='offline'").Scan(&offline)
-	db.DB.QueryRow("SELECT COUNT(*) FROM projects WHERE status='maintenance'").Scan(&maintenance)
+	userRole := r.Header.Get("X-Role")
+	userID := r.Header.Get("X-User-ID")
+	where := ""
+	args := []interface{}{}
+	if userRole != "super_admin" {
+		// Non-admins see stats scoped to their own projects — counts of the
+		// whole fleet are an information leak for a viewer with no access.
+		var accessStr string
+		db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", userID).Scan(&accessStr)
+		var accessIDs []string
+		json.Unmarshal([]byte(accessStr), &accessIDs)
+		if len(accessIDs) == 0 {
+			auth.JSONOK(w, map[string]int{"total_projects": 0, "online": 0, "offline": 0, "maintenance": 0, "total_users": 0})
+			return
+		}
+		placeholders := make([]string, len(accessIDs))
+		for i, pid := range accessIDs {
+			placeholders[i] = "$" + strconv.Itoa(i+1)
+			args = append(args, pid)
+		}
+		where = " WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	count := func(q string, a ...interface{}) int {
+		var n int
+		db.DB.QueryRow(q, a...).Scan(&n)
+		return n
+	}
+	total := count("SELECT COUNT(*) FROM projects" + where, args...)
+	online := count("SELECT COUNT(*) FROM projects WHERE status='online'" + strings.Replace(where, "WHERE", "AND", 1), args...)
+	offline := count("SELECT COUNT(*) FROM projects WHERE status='offline'" + strings.Replace(where, "WHERE", "AND", 1), args...)
+	maintenance := count("SELECT COUNT(*) FROM projects WHERE status='maintenance'" + strings.Replace(where, "WHERE", "AND", 1), args...)
+	// users_count = synced end-user counts of managed projects; adding Lambs
+	// platform users to it was double counting. Report them separately.
 	var lambsUsers, projectUsers int
 	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&lambsUsers)
-	db.DB.QueryRow("SELECT COALESCE(SUM(users_count), 0) FROM projects").Scan(&projectUsers)
-	auth.JSONOK(w, map[string]int{"total_projects": total, "online": online, "offline": offline, "maintenance": maintenance, "total_users": lambsUsers + projectUsers})
+	db.DB.QueryRow("SELECT COALESCE(SUM(users_count), 0) FROM projects" + where, args...).Scan(&projectUsers)
+	auth.JSONOK(w, map[string]int{"total_projects": total, "online": online, "offline": offline, "maintenance": maintenance, "total_users": lambsUsers, "project_users": projectUsers})
 }
 
 // VectorSearch runs a similarity search on a Qdrant datasource.
@@ -682,6 +716,9 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	pkCol := r.URL.Query().Get("pk")
 	pkVal := r.URL.Query().Get("pkval")
 	if table == "" || pkCol == "" { auth.JSONErr(w, 400, "缺少table/pk参数"); return }
+	// pkCol is spliced into the WHERE clause by the adapters — same charset
+	// gate as row keys, otherwise "id\" OR 1=1 --" rewrites every row.
+	if !safeColName.MatchString(pkCol) { auth.JSONErr(w, 400, "非法主键列名"); return }
 	var row map[string]interface{}
 	json.NewDecoder(r.Body).Decode(&row)
 	if err := validateRowCols(row); err != nil { auth.JSONErr(w, 400, err.Error()); return }
@@ -721,6 +758,7 @@ func DeleteTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	pkCol := r.URL.Query().Get("pk")
 	pkVal := r.URL.Query().Get("pkval")
 	if table == "" || pkCol == "" || pkVal == "" { auth.JSONErr(w, 400, "缺少table/pk/pkval参数"); return }
+	if !safeColName.MatchString(pkCol) { auth.JSONErr(w, 400, "非法主键列名"); return }
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
 	if err := src.DeleteItem(table, pkCol, pkVal); err != nil { auth.JSONErr(w, 500, err.Error()); return }
@@ -769,6 +807,7 @@ func exportCSV(w http.ResponseWriter, filename string, cols []string, rows []map
 }
 
 func ProjectMembers(w http.ResponseWriter, r *http.Request, id string) {
+	if !CheckProjectView(r, id) { auth.JSONErr(w, 403, "无权限访问该项目"); return }
 	rows, err := db.DB.Query("SELECT u.id, u.username, u.name, u.email, u.role, u.status, COALESCE(u.avatar_url::text,'') FROM users u WHERE u.project_access::text LIKE '%' || $1 || '%' OR u.role='super_admin'", id)
 	if err != nil { auth.JSONOK(w, map[string]interface{}{"members": []models.User{}, "non_members": []models.User{}}); return }
 	defer rows.Close()
@@ -788,9 +827,15 @@ func AddMember(w http.ResponseWriter, r *http.Request, id string) {
 	json.NewDecoder(r.Body).Decode(&req)
 	var access string
 	db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", req.UserID).Scan(&access)
-	if !strings.Contains(access, id) {
-		var arr []string
-		json.Unmarshal([]byte(access), &arr)
+	// Exact array membership — substring matching makes "app" collide with
+	// "app2" and silently skips the grant.
+	var arr []string
+	json.Unmarshal([]byte(access), &arr)
+	already := false
+	for _, pid := range arr {
+		if pid == id { already = true; break }
+	}
+	if !already {
 		arr = append(arr, id)
 		newAccess, _ := json.Marshal(arr)
 		db.DB.Exec("UPDATE users SET project_access=$1 WHERE id=$2", string(newAccess), req.UserID)

@@ -113,6 +113,70 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 		lines = 20
 	}
 	logs := []map[string]interface{}{}
+	isSA := r.Header.Get("X-Role") == "super_admin"
+	userID := r.Header.Get("X-User-ID")
+	// Non-super-admin sees only their own audit rows and the status rows of
+	// projects they can access — the full audit trail is admin-only.
+	if !isSA {
+		var accessRaw string
+		db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", userID).Scan(&accessRaw)
+		var accessIDs []string
+		json.Unmarshal([]byte(accessRaw), &accessIDs)
+		if len(accessIDs) == 0 {
+			auth.JSONOK(w, logs)
+			return
+		}
+		// Own audit rows
+		auditRows, err := db.DB.Query("SELECT id, user_id, user_name, action, target, detail, created_at::text FROM audit_logs WHERE user_id=$1 ORDER BY id DESC LIMIT $2", userID, lines/2)
+		if err == nil && auditRows != nil {
+			defer auditRows.Close()
+			for auditRows.Next() {
+				var l models.AuditLog
+				var uname string
+				auditRows.Scan(&l.ID, &l.UserID, &uname, &l.Action, &l.Target, &l.Detail, &l.CreatedAt)
+				if uname == "" {
+					uname = "Lambs"
+				}
+				msg := l.Detail
+				if l.Target != "" && l.Target != uname {
+					msg = l.Target + " — " + l.Detail
+				}
+				logs = append(logs, map[string]interface{}{
+					"project_name": uname, "level": "info", "time": l.CreatedAt,
+					"message": msg,
+				})
+			}
+		}
+		// Status rows for accessible projects only
+		placeholders := make([]string, len(accessIDs))
+		args := []interface{}{}
+		for i, pid := range accessIDs {
+			placeholders[i] = "$" + strconv.Itoa(i+1)
+			args = append(args, pid)
+		}
+		pRows, err := db.DB.Query("SELECT name, status, updated_at::text FROM projects WHERE id IN ("+strings.Join(placeholders, ",")+") ORDER BY updated_at DESC LIMIT $"+strconv.Itoa(len(accessIDs)+1), append(args, lines/2)...)
+		if err == nil && pRows != nil {
+			defer pRows.Close()
+			for pRows.Next() {
+				var name, status, updated string
+				pRows.Scan(&name, &status, &updated)
+				statusLabel := map[string]string{"online": "运行中", "offline": "已离线", "maintenance": "维护中"}[status]
+				lvl := "info"
+				if status != "online" {
+					lvl = "warn"
+				}
+				logs = append(logs, map[string]interface{}{
+					"project_name": name, "level": lvl, "time": updated,
+					"message": fmt.Sprintf("状态: %s · 最后更新: %s", statusLabel, updated),
+				})
+			}
+		}
+		if logs == nil {
+			logs = []map[string]interface{}{}
+		}
+		auth.JSONOK(w, logs)
+		return
+	}
 	auditRows, _ := db.DB.Query("SELECT id, user_id, user_name, action, target, detail, created_at::text FROM audit_logs ORDER BY id DESC LIMIT $1", lines/2)
 	if auditRows != nil {
 		defer auditRows.Close()
@@ -260,7 +324,13 @@ func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 		lines = 50
 	}
 	var svc string
-	db.DB.QueryRow("SELECT COALESCE(service_name,'') FROM projects WHERE id=$1", id).Scan(&svc)
+	err := db.DB.QueryRow("SELECT COALESCE(service_name,'') FROM projects WHERE id=$1", id).Scan(&svc)
+	if err != nil || !handlers.CheckProjectView(r, id) {
+		// Unknown id must never reach the file path below (path traversal);
+		// the user must also have view access to this project's logs.
+		auth.JSONErr(w, 404, "项目不存在")
+		return
+	}
 	if svc != "" {
 		cmd := exec.Command("journalctl", "-u", svc+".service", "-n", strconv.Itoa(lines), "--no-pager", "-o", "short")
 		out, err := cmd.CombinedOutput()

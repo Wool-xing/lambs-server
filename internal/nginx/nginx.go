@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -107,7 +108,18 @@ func buildConfig(projects []models.Project) string {
 		"    proxy_set_header Host $host;",
 		"    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
 		"}", ""}
+	// bpRe is the charset gate for nginx location paths — anything else could
+	// inject raw config directives into the managed vhost.
+	bpRe := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$`)
 	for _, p := range projects {
+		bp := strings.TrimPrefix(p.BasePath, "/")
+		if !bpRe.MatchString(bp) {
+			log.Printf("nginx: skipping project %s — base_path %q is not a safe nginx path", p.ID, p.BasePath)
+			continue
+		}
+		// Comment injection: a newline in the name would start a new directive line.
+		name := strings.ReplaceAll(p.Name, "\n", " ")
+		name = strings.ReplaceAll(name, "\r", " ")
 		// Web1 must reach the project through App1's on-demand TCP proxy
 		// (App1-TS:<port>). backend_url is the proxy's internal target on
 		// App1 and is NOT reachable from Web1 — using it directly here was
@@ -122,7 +134,6 @@ func buildConfig(projects []models.Project) string {
 				apiTarget = "http://" + apiTarget
 			}
 		}
-		bp := strings.TrimPrefix(p.BasePath, "/")
 		lines = append(lines, fmt.Sprintf(`
 # %s — Lambs managed
 location = /%s/favicon.svg {
@@ -148,7 +159,7 @@ location /%s {
     auth_request /lambs-gate-%s;
     error_page 403 = /lambs-offline;
     try_files $uri $uri/ /%s/index.html;
-}`, p.Name, bp, bp, bp, bp,
+}`, name, bp, bp, bp, bp,
 			bp, bp, apiTarget, bp, bp, bp))
 	}
 	return strings.Join(lines, "\n")

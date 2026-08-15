@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -89,9 +90,13 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 func UpdateUser(w http.ResponseWriter, r *http.Request, id string) {
 	var u models.User
 	json.NewDecoder(r.Body).Decode(&u)
+	if u.Username == "" { auth.JSONErr(w, 400, "用户名不能为空"); return }
+	if u.Role != "super_admin" && u.Role != "project_admin" && u.Role != "viewer" { auth.JSONErr(w, 400, "角色不合法"); return }
+	if u.Status != "active" && u.Status != "disabled" { auth.JSONErr(w, 400, "状态不合法"); return }
 	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
 	av := u.AvatarURL; if av == "" { av = "null" }
 	db.DB.Exec("UPDATE users SET username=$1, name=$2, email=$3, role=$4, status=$5, project_access=$6::jsonb, avatar_url=$7 WHERE id=$8", u.Username, u.Name, u.Email, u.Role, u.Status, pa, av, id)
+	auditLog(r, "修改用户", u.Username, fmt.Sprintf("role=%s status=%s", u.Role, u.Status))
 	auth.JSONOK(w, map[string]string{"updated": id})
 }
 

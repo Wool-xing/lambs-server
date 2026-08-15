@@ -34,6 +34,15 @@ func RateLimit(max int, window time.Duration) func(http.HandlerFunc) http.Handle
 			ip := clientIP(r)
 			now := time.Now()
 			loginLimiter.Lock()
+			// Rotating spoofed XFF headers would grow the map without bound —
+			// sweep stale keys once past a threshold.
+			if len(loginLimiter.hits) > 10000 {
+				for k, times := range loginLimiter.hits {
+					if len(times) == 0 || now.Sub(times[len(times)-1]) > window {
+						delete(loginLimiter.hits, k)
+					}
+				}
+			}
 			kept := loginLimiter.hits[ip][:0]
 			for _, t := range loginLimiter.hits[ip] {
 				if now.Sub(t) < window {
