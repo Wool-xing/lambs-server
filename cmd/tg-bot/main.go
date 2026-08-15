@@ -22,19 +22,27 @@ import (
 	"time"
 )
 
-// Server IPs — configurable via environment, defaults for production Tailscale network
+// Server IPs — deployment-specific, must come from the environment.
+// No hardcoded defaults: a wrong default would run commands on the wrong host.
 var (
-	app1         = os.Getenv("TG_APP1_IP")
-	app2         = os.Getenv("TG_WEB1_IP")
-	token        string
+	app1          = os.Getenv("TG_APP1_IP")
+	app2          = os.Getenv("TG_WEB1_IP")
+	token         string
 	webhookSecret string
-	webhookURL   = os.Getenv("TG_WEBHOOK_URL")
+	webhookURL    = os.Getenv("TG_WEBHOOK_URL")
 )
 
+// adminChats is the allowlist of Telegram chat IDs permitted to run commands
+// (comma-separated TG_ADMIN_CHAT_IDS). Empty = deny all (secure default).
+var adminChats = map[int64]bool{}
+
 func init() {
-	if app1 == "" { app1 = "100.92.91.11" }
-	if app2 == "" { app2 = "100.126.18.126" }
 	if webhookURL == "" { webhookURL = "https://wool.cc.cd/tg-webhook" }
+	for _, s := range strings.Split(os.Getenv("TG_ADMIN_CHAT_IDS"), ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil && id > 0 {
+			adminChats[id] = true
+		}
+	}
 }
 
 func loadSecrets() {
@@ -117,6 +125,9 @@ func run(cmd string) string {
 }
 
 func runSSH(host, cmd string) string {
+	if host == "" {
+		return "未配置 TG_WEB1_IP"
+	}
 	return run(fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 %s %s", host, cmd))
 }
 
@@ -165,6 +176,12 @@ func fmtSize(b int64) string {
 // ── Command handlers ────────────────────────────────────
 
 func handleCommand(chatID int64, text string) {
+	// Authorization gate: only allowlisted chat IDs may run anything. Without
+	// this, anyone who finds the bot could restart services or pull files.
+	if !adminChats[chatID] {
+		sendMessage(chatID, "未授权的会话。请在 TG_ADMIN_CHAT_IDS 中配置此 chat_id 后重试。")
+		return
+	}
 	switch {
 	case text == "/start" || text == "/help":
 		sendMessage(chatID, "🐑 Lambs 服务器管理\n\n"+

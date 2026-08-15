@@ -138,13 +138,14 @@ func HandleOfflinePage(w http.ResponseWriter, r *http.Request) {
 	}
 	cardBg := fmt.Sprintf("rgba(17,21,28,%.2f)", glassAlpha)
 
+	// Inlining the base64 logo here made every blocked page weigh megabytes
+	// (5MB+ observed) — reference the favicon endpoint instead, which nginx
+	// already proxies from /<base_path>/favicon.svg.
 	iconTag := ""
-	if icon != "" && strings.HasPrefix(icon, "data:image/") {
-		iconTag = fmt.Sprintf(`<img src="%s" alt="" class="logo">`, html.EscapeString(icon))
-	}
 	faviconTag := ""
-	if icon != "" && strings.HasPrefix(icon, "data:image/") {
-		faviconTag = fmt.Sprintf(`<link rel="icon" href="%s">`, html.EscapeString(icon))
+	if icon != "" && strings.HasPrefix(icon, "data:image/") && path != "" {
+		iconTag = fmt.Sprintf(`<img src="/%s/favicon.svg" alt="" class="logo">`, html.EscapeString(path))
+		faviconTag = fmt.Sprintf(`<link rel="icon" href="/%s/favicon.svg">`, html.EscapeString(path))
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
