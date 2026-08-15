@@ -11,7 +11,8 @@ type DataSource interface {
 	// ListCollections returns all user-facing collections/tables.
 	ListCollections() ([]string, error)
 	// ReadItems returns rows, column names and primary key column of a collection.
-	ReadItems(collection string) ([]map[string]interface{}, []string, string, error)
+	ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error)
+	CountItems(collection string) (int, error)
 	// InsertItem inserts one item. data maps column name -> value.
 	InsertItem(collection string, data map[string]interface{}) error
 	// UpdateItem updates one item identified by pkCol=pkVal.

@@ -86,7 +86,7 @@ func (s *RedisSource) keyType(ctx context.Context, c *redis.Client, key string) 
 	return t
 }
 
-func (s *RedisSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *RedisSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateKey(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -205,3 +205,5 @@ func str(v interface{}) string {
 	}
 	return fmt.Sprintf("%v", v)
 }
+
+func (s *RedisSource) CountItems(collection string) (int, error) { return 0, nil }

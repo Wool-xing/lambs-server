@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -39,7 +40,19 @@ func (s *SQLiteSource) ListCollections() ([]string, error) {
 	return tables, nil
 }
 
-func (s *SQLiteSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *SQLiteSource) CountItems(collection string) (int, error) {
+	if err := validateTable(collection); err != nil {
+		return 0, err
+	}
+	out, err := exec.Command("sqlite3", s.dbPath(), fmt.Sprintf("SELECT COUNT(*) FROM %s;", collection)).Output()
+	if err != nil {
+		return 0, err
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n, nil
+}
+
+func (s *SQLiteSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateTable(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -78,7 +91,11 @@ func (s *SQLiteSource) ReadItems(collection string) ([]map[string]interface{}, [
 		for i, c := range cols {
 			quotedCols[i] = fmt.Sprintf("\"%s\"", c)
 		}
-		cmd2 := exec.Command("sqlite3", "-json", s.dbPath(), fmt.Sprintf("SELECT %s FROM %s LIMIT 500;", strings.Join(quotedCols, ","), t))
+		paging := ""
+		if limit > 0 {
+			paging = fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+		}
+		cmd2 := exec.Command("sqlite3", "-json", s.dbPath(), fmt.Sprintf("SELECT %s FROM %s%s;", strings.Join(quotedCols, ","), t, paging))
 		var out2 bytes.Buffer
 		cmd2.Stdout = &out2
 		if err := cmd2.Run(); err != nil {

@@ -641,7 +641,14 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 	table := r.URL.Query().Get("table")
 	src, err := db.NewDataSource(dsn)
 	if err != nil { auth.JSONErr(w, 400, err.Error()); return }
-	data, cols, pk, err := src.ReadItems(table)
+	// Pagination: page/page_size query params. Absent = full read (legacy).
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	limit, offset := 0, 0
+	if page > 0 && pageSize > 0 {
+		limit, offset = pageSize, (page-1)*pageSize
+	}
+	data, cols, pk, err := src.ReadItems(table, limit, offset)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	if r.URL.Query().Get("format") == "csv" {
 		exportCSV(w, id+"_"+table, cols, data)
@@ -649,7 +656,8 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	actualTable := table
 	if actualTable == "" && len(cols) > 0 { actualTable = "users" }
-	auth.JSONOK(w, map[string]interface{}{"columns": cols, "rows": data, "table": actualTable, "pk": pk})
+	total, _ := src.CountItems(table)
+	auth.JSONOK(w, map[string]interface{}{"columns": cols, "rows": data, "table": actualTable, "pk": pk, "total": total, "page": page, "page_size": pageSize})
 }
 
 // ListTableNames returns all user tables in the project's database.
@@ -677,7 +685,7 @@ func refreshTabsSnapshot(projectID, table, dsn string) {
 	db.DB.QueryRow("SELECT COALESCE(tabs::text,'[]') FROM projects WHERE id=$1", projectID).Scan(&tabsRaw)
 	src, err := db.NewDataSource(dsn)
 	if err != nil { return }
-	rows, cols, pk, err := src.ReadItems(table)
+	rows, cols, pk, err := src.ReadItems(table, 0, 0)
 	if err != nil { return }
 	var tabRows [][]interface{}
 	for _, r := range rows {

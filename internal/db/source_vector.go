@@ -118,7 +118,7 @@ func (s *VectorSource) scrollPoints(collection string, limit int) ([]map[string]
 	return rows, nil
 }
 
-func (s *VectorSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *VectorSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateTable(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -257,3 +257,5 @@ func (s *VectorSource) Search(collection string, vector []float64, topK int) ([]
 	}
 	return hits, nil
 }
+
+func (s *VectorSource) CountItems(collection string) (int, error) { return 0, nil }

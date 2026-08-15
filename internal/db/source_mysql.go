@@ -69,7 +69,7 @@ func (s *MySQLSource) ListCollections() ([]string, error) {
 	return tables, nil
 }
 
-func (s *MySQLSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *MySQLSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateTable(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -83,7 +83,11 @@ func (s *MySQLSource) ReadItems(collection string) ([]map[string]interface{}, []
 		tables = []string{"users", "user", "accounts", "member"}
 	}
 	for _, t := range tables {
-		rows, err := tdb.Query(fmt.Sprintf("SELECT * FROM `%s` LIMIT 500", t))
+		query := fmt.Sprintf("SELECT * FROM `%s`", t)
+		if limit > 0 {
+			query += fmt.Sprintf(" LIMIT %d, %d", offset, limit)
+		}
+		rows, err := tdb.Query(query)
 		if err != nil {
 			continue
 		}
@@ -118,6 +122,20 @@ func (s *MySQLSource) ReadItems(collection string) ([]map[string]interface{}, []
 		return result, filteredCols, s.pkColumn(tdb, t), nil
 	}
 	return []map[string]interface{}{}, []string{}, "", nil
+}
+
+func (s *MySQLSource) CountItems(collection string) (int, error) {
+	if err := validateTable(collection); err != nil {
+		return 0, err
+	}
+	tdb, err := s.open()
+	if err != nil {
+		return 0, err
+	}
+	defer tdb.Close()
+	var n int
+	err = tdb.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s`", collection)).Scan(&n)
+	return n, err
 }
 
 func (s *MySQLSource) pkColumn(tdb *sql.DB, table string) string {

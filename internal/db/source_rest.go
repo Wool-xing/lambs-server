@@ -75,7 +75,7 @@ func (s *RESTSource) ListCollections() ([]string, error) {
 	return []string{}, nil
 }
 
-func (s *RESTSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *RESTSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateTable(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -163,3 +163,5 @@ func (s *RESTSource) DeleteItem(collection, pkCol, pkVal string) error {
 	}
 	return nil
 }
+
+func (s *RESTSource) CountItems(collection string) (int, error) { return 0, nil }

@@ -36,7 +36,7 @@ func (s *PostgresSource) ListCollections() ([]string, error) {
 	return tables, nil
 }
 
-func (s *PostgresSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *PostgresSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateTable(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -50,7 +50,13 @@ func (s *PostgresSource) ReadItems(collection string) ([]map[string]interface{},
 		tables = []string{"users", "user", "accounts", "member"}
 	}
 	for _, t := range tables {
-		rows, err := tdb.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 500", t))
+		query := fmt.Sprintf("SELECT * FROM %s", t)
+		args := []interface{}{}
+		if limit > 0 {
+			query += " LIMIT $2 OFFSET $3"
+			args = append(args, limit, offset)
+		}
+		rows, err := tdb.Query(query, args...)
 		if err != nil {
 			continue
 		}
@@ -86,6 +92,20 @@ func (s *PostgresSource) ReadItems(collection string) ([]map[string]interface{},
 		return result, filteredCols, pk, nil
 	}
 	return []map[string]interface{}{}, []string{}, "", nil
+}
+
+func (s *PostgresSource) CountItems(collection string) (int, error) {
+	if err := validateTable(collection); err != nil {
+		return 0, err
+	}
+	tdb, err := sql.Open("postgres", s.normDSN())
+	if err != nil {
+		return 0, err
+	}
+	defer tdb.Close()
+	var n int
+	err = tdb.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", collection)).Scan(&n)
+	return n, err
 }
 
 func (s *PostgresSource) pkColumn(tdb *sql.DB, table string) string {

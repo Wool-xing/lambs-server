@@ -78,7 +78,22 @@ func (s *MongoSource) ListCollections() ([]string, error) {
 	return names, nil
 }
 
-func (s *MongoSource) ReadItems(collection string) ([]map[string]interface{}, []string, string, error) {
+func (s *MongoSource) CountItems(collection string) (int, error) {
+	if err := validateTable(collection); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, db, err := s.connect(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Disconnect(ctx)
+	n, err := db.Collection(collection).CountDocuments(ctx, bson.D{})
+	return int(n), err
+}
+
+func (s *MongoSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
 	if err := validateTable(collection); err != nil {
 		return nil, nil, "", err
 	}
@@ -89,7 +104,11 @@ func (s *MongoSource) ReadItems(collection string) ([]map[string]interface{}, []
 		return nil, nil, "", err
 	}
 	defer client.Disconnect(ctx)
-	cursor, err := db.Collection(collection).Find(ctx, bson.D{}, options.Find().SetLimit(200))
+	findOpts := options.Find().SetLimit(200)
+	if limit > 0 {
+		findOpts = options.Find().SetLimit(int64(limit)).SetSkip(int64(offset))
+	}
+	cursor, err := db.Collection(collection).Find(ctx, bson.D{}, findOpts)
 	if err != nil {
 		return nil, nil, "", err
 	}
