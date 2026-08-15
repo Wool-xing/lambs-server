@@ -213,6 +213,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 		if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 		if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 		if p.Tabs == nil { p.Tabs = []interface{}{} }
+		p.Tabs = redactTabs(p.Tabs)
 		if dsRaw.Valid { json.Unmarshal([]byte(dsRaw.String), &p.Datasources) }
 		if _, ok := p.Datasources.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Datasources.(string)), &arr); p.Datasources = arr }
 		if p.Datasources == nil { p.Datasources = []interface{}{} }
@@ -264,6 +265,7 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	if tabsRaw.Valid { json.Unmarshal([]byte(tabsRaw.String), &p.Tabs) }
 	if _, ok := p.Tabs.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tabs.(string)), &arr); p.Tabs = arr }
 	if p.Tabs == nil { p.Tabs = []interface{}{} }
+	p.Tabs = redactTabs(p.Tabs)
 	if dsRaw.Valid { json.Unmarshal([]byte(dsRaw.String), &p.Datasources) }
 	if _, ok := p.Datasources.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Datasources.(string)), &arr); p.Datasources = arr }
 	if p.Datasources == nil { p.Datasources = []interface{}{} }
@@ -705,6 +707,11 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	data, cols, pk, err := src.ReadItems(table, limit, offset)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	// Single-point redaction: never expose password/token values through the
+	// data browser, regardless of data source (REST/Mongo/Redis rows were
+	// previously returned unfiltered).
+	data = db.RedactSensitive(data)
+	cols = db.RedactSensitiveCols(cols)
 	if search != "" {
 		q := strings.ToLower(strings.TrimSpace(search))
 		filtered := make([]map[string]interface{}, 0, len(data))
@@ -801,6 +808,9 @@ func refreshTabsSnapshot(projectID, table, dsn string) {
 	if err != nil { return }
 	rows, cols, pk, err := src.ReadItems(table, 0, 0)
 	if err != nil { return }
+	// Same redaction as the data browser: tabs are served back to viewers.
+	rows = db.RedactSensitive(rows)
+	cols = db.RedactSensitiveCols(cols)
 	var tabRows [][]interface{}
 	for _, r := range rows {
 		arr := make([]interface{}, len(cols))
