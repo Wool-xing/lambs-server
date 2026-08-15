@@ -40,6 +40,10 @@ func NewDataSource(dsn string) (DataSource, error) {
 	if i := strings.Index(scheme, "+"); i > 0 {
 		scheme = scheme[:i]
 	}
+	// SSRF guard runs here so every dial path is covered, not just TestDSN.
+	if err := CheckDSNHost(dsn); err != nil {
+		return nil, err
+	}
 	switch scheme {
 	case "postgres", "postgresql":
 		return &PostgresSource{dsn: dsn}, nil

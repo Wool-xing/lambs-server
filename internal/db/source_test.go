@@ -21,16 +21,19 @@ func TestParseScheme(t *testing.T) {
 }
 
 func TestNewDataSourceRouting(t *testing.T) {
+	// Placeholder hosts are loopback literals: NewDataSource now runs the SSRF
+	// guard, so unresolvable placeholder hosts would be (correctly) rejected.
 	cases := map[string]string{
 		"sqlite:////tmp/x.db":                         "sqlite",
-		"postgresql://u@h/db":                         "postgresql",
-		"postgresql+asyncpg://u@h/db":                 "postgresql",
-		"mysql://u:p@h/db":                            "mysql",
-		"mongodb://h/db":                              "mongodb",
-		"mongo://h/db":                                "mongodb",
-		"redis://:p@h/0":                              "redis",
-		"http://h/api":                                "http",
-		"https://h/api": "http", // both are RESTSource
+		"postgresql://u@127.0.0.1/db":                 "postgresql",
+		"postgresql+asyncpg://u@127.0.0.1/db":         "postgresql",
+		"mysql://u:p@127.0.0.1/db":                    "mysql",
+		"mongodb://127.0.0.1/db":                      "mongodb",
+		"mongo://127.0.0.1/db":                        "mongodb",
+		"redis://:p@127.0.0.1/0":                      "redis",
+		"http://127.0.0.1/api":                        "http",
+		"https://127.0.0.1/api": "http", // both are RESTSource
+		"qdrant://127.0.0.1:6333":                     "qdrant",
 	}
 	for dsn, wantType := range cases {
 		src, err := NewDataSource(dsn)
@@ -52,6 +55,8 @@ func TestNewDataSourceRouting(t *testing.T) {
 			got = "redis"
 		case *RESTSource:
 			got = "http"
+		case *VectorSource:
+			got = "qdrant"
 		}
 		if got != wantType {
 			t.Errorf("NewDataSource(%q) routed to %q, want %q", dsn, got, wantType)

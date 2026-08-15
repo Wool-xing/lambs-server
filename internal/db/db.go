@@ -159,6 +159,10 @@ func SyncUserData(dsn string) []map[string]interface{} {
 	if dsn == "" || dsn == "—" {
 		return nil
 	}
+	// SSRF guard: this path dials postgres directly, bypassing NewDataSource.
+	if err := CheckDSNHost(dsn); err != nil {
+		return nil
+	}
 	dsn2 := strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
 	dsn2 = strings.Replace(dsn2, "sqlite:///", "", 1)
 	if strings.Contains(dsn, "postgres") {

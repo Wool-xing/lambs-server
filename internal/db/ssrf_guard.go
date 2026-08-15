@@ -11,13 +11,16 @@ import (
 // (SSRF guard). Tailscale CGNAT (100.64/10) is allowed — managed datasources
 // legitimately live there. Returns an error suitable for a 400 response.
 func CheckDSNHost(dsn string) error {
+	// Scheme matching is case-insensitive (parseScheme lowercases too); a
+	// mixed-case "Mongo://" must not skip host extraction.
+	dsn = strings.ToLower(dsn)
 	if dsn == "" || dsn == "—" || strings.HasPrefix(dsn, "sqlite") {
 		return nil // local file or nothing to judge
 	}
 	host := ""
-	if strings.HasPrefix(dsn, "http") || strings.HasPrefix(dsn, "mongodb") ||
+	if strings.HasPrefix(dsn, "http") || strings.HasPrefix(dsn, "mongo") ||
 		strings.HasPrefix(dsn, "mysql") || strings.HasPrefix(dsn, "redis") ||
-		strings.HasPrefix(dsn, "postgres") {
+		strings.HasPrefix(dsn, "postgres") || strings.HasPrefix(dsn, "qdrant") {
 		if u, err := url.Parse(dsn); err == nil && u.Hostname() != "" {
 			host = u.Hostname()
 		}
