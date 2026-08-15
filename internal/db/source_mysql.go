@@ -34,6 +34,9 @@ func (s *MySQLSource) goDSN() (string, error) {
 	cfg.Addr = u.Host
 	cfg.DBName = strings.TrimPrefix(u.Path, "/")
 	cfg.Timeout = 5 * time.Second
+	// utf8mb4 — without this the connection falls back to a 3-byte charset
+	// and 4-byte characters (emoji, CJK ext-B) are silently stored as "?".
+	cfg.Params = map[string]string{"charset": "utf8mb4"}
 	return cfg.FormatDSN(), nil
 }
 
