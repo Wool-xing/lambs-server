@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
@@ -25,7 +26,7 @@ func sha256Hex(s string) string {
 func ListUsers(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
 	roleFilter := r.URL.Query().Get("role")
-	query := "SELECT id, username, name, email, role, status, COALESCE(project_access::text,'[]'), COALESCE(avatar_url::text,''), COALESCE(last_login::text,'') FROM users WHERE 1=1"
+	query := "SELECT id, username, name, email, role, status, COALESCE(project_access::text,'[]'), COALESCE(avatar_url::text,''), COALESCE(avatar_thumb,''), COALESCE(last_login::text,'') FROM users WHERE 1=1"
 	var args []interface{}
 	argIdx := 0
 	if search != "" { argIdx++; query += " AND (username ILIKE $" + strconv.Itoa(argIdx) + " OR name ILIKE $" + strconv.Itoa(argIdx) + " OR email ILIKE $" + strconv.Itoa(argIdx) + ")"; args = append(args, "%"+search+"%") }
@@ -35,7 +36,7 @@ func ListUsers(w http.ResponseWriter, r *http.Request) {
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	defer rows.Close()
 	users := []models.User{}
-	for rows.Next() { var u models.User; var pa, av string; rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &pa, &av, &u.LastLogin); u.ProjectAccess = pa; u.AvatarURL = av; users = append(users, u) }
+	for rows.Next() { var u models.User; var pa, av, avThumb string; rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status, &pa, &av, &u.LastLogin); u.ProjectAccess = pa; if avThumb != "" { av = avThumb } else if len(av) > 64*1024 { av = "" }; u.AvatarURL = av; users = append(users, u) }
 	if users == nil { users = []models.User{} }
 	var all, super, projAdmin, viewer int
 	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&all)
@@ -70,8 +71,14 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	u := models.User{Username: req.Username, Name: req.Name, Email: req.Email, Role: req.Role, ProjectAccess: req.ProjectAccess, AvatarURL: req.AvatarURL}
 	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
 	av := u.AvatarURL; if av == "" { av = "null" }
-	err := db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, avatar_url) VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,'active',$6::jsonb,$7) RETURNING id::text",
-		u.Username, u.Name, u.Email, string(hash), u.Role, pa, av).Scan(&u.ID)
+	avThumb := ""
+	if u.AvatarURL != "" {
+		if t, err := makeThumb(u.AvatarURL, 128); err == nil && t != u.AvatarURL {
+			avThumb = t
+		}
+	}
+	err := db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, avatar_url, avatar_thumb) VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,'active',$6::jsonb,$7,$8) RETURNING id::text",
+		u.Username, u.Name, u.Email, string(hash), u.Role, pa, av, avThumb).Scan(&u.ID)
 	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
 	auditLog(r, "创建用户", u.Username, "role="+u.Role)
 	// Auto-generated password must reach the admin (frontend toasts res.data.password) —
@@ -95,7 +102,13 @@ func UpdateUser(w http.ResponseWriter, r *http.Request, id string) {
 	if u.Status != "active" && u.Status != "disabled" { auth.JSONErr(w, 400, "状态不合法"); return }
 	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
 	av := u.AvatarURL; if av == "" { av = "null" }
-	db.DB.Exec("UPDATE users SET username=$1, name=$2, email=$3, role=$4, status=$5, project_access=$6::jsonb, avatar_url=$7 WHERE id=$8", u.Username, u.Name, u.Email, u.Role, u.Status, pa, av, id)
+	avThumb := ""
+	if strings.HasPrefix(u.AvatarURL, "data:") {
+		if t, err := makeThumb(u.AvatarURL, 128); err == nil && t != u.AvatarURL {
+			avThumb = t
+		}
+	}
+	db.DB.Exec("UPDATE users SET username=$1, name=$2, email=$3, role=$4, status=$5, project_access=$6::jsonb, avatar_url=$7, avatar_thumb=COALESCE(NULLIF($8,''), avatar_thumb) WHERE id=$9", u.Username, u.Name, u.Email, u.Role, u.Status, pa, av, avThumb, id)
 	auditLog(r, "修改用户", u.Username, fmt.Sprintf("role=%s status=%s", u.Role, u.Status))
 	auth.JSONOK(w, map[string]string{"updated": id})
 }

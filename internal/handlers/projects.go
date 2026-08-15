@@ -160,7 +160,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 	sortBy := r.URL.Query().Get("sort_by")
 	userRole := r.Header.Get("X-Role")
 	userID := r.Header.Get("X-User-ID")
-	query := "SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE 1=1"
+	query := "SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,''), COALESCE(EXTRACT(EPOCH FROM updated_at)::int,0), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE 1=1"
 	var args []interface{}
 	argIdx := 0
 	if statusFilter != "" && statusFilter != "all" { argIdx++; query += " AND status=$" + strconv.Itoa(argIdx); args = append(args, statusFilter) }
@@ -194,8 +194,13 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 	projects := []models.Project{}
 	for rows.Next() {
 		var p models.Project
+		var updatedUnix int
 		var tagsRaw, featuresRaw, tabsRaw, dsRaw, svcRaw sql.NullString
-		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &p.CreatedAt, &p.UpdatedAt, &p.BackupIntervalHours, &p.BackupRetentionDays)
+		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &p.CreatedAt, &p.UpdatedAt, &updatedUnix, &p.BackupIntervalHours, &p.BackupRetentionDays)
+		// Icon rides as a cached image URL, not megabytes of base64 in JSON.
+		if p.IconURL != "" {
+			p.IconURL = fmt.Sprintf("/api/projects/%s/logo?v=%d", p.ID, updatedUnix)
+		}
 		if p.DSN == "" { p.DSN = "—" }
 		if tagsRaw.Valid { json.Unmarshal([]byte(tagsRaw.String), &p.Tags) }
 		if _, ok := p.Tags.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tags.(string)), &arr); p.Tags = arr }
@@ -239,10 +244,14 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 		if !allowed { auth.JSONErr(w, 403, "无权限访问该项目"); return }
 	}
 	var p models.Project
+	var updatedUnix int
 	var tagsRaw, featuresRaw, tabsRaw, dsRaw, svcRaw sql.NullString
-	err := db.DB.QueryRow("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE id=$1", id).
-		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &p.BackupIntervalHours, &p.BackupRetentionDays)
+	err := db.DB.QueryRow("SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(EXTRACT(EPOCH FROM updated_at)::int,0), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE id=$1", id).
+		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &updatedUnix, &p.BackupIntervalHours, &p.BackupRetentionDays)
 	if err != nil { auth.JSONErr(w, 404, "项目不存在"); return }
+	if p.IconURL != "" {
+		p.IconURL = fmt.Sprintf("/api/projects/%s/logo?full=1&v=%d", p.ID, updatedUnix)
+	}
 	if p.DSN == "" { p.DSN = "—" }
 	if tagsRaw.Valid { json.Unmarshal([]byte(tagsRaw.String), &p.Tags) }
 	if _, ok := p.Tags.(string); ok { var arr []interface{}; json.Unmarshal([]byte(p.Tags.(string)), &arr); p.Tags = arr }
@@ -320,8 +329,14 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 			p.Port = fmt.Sprintf("%d", port)
 		}
 	}
-	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, services, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24::jsonb,$25::jsonb,$26,$27) RETURNING id",
-		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, dsJSON, svcJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
+	iconThumb := ""
+	if p.IconURL != "" {
+		if t, err := makeThumb(p.IconURL, 128); err == nil && t != p.IconURL {
+			iconThumb = t
+		}
+	}
+	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, icon_thumb, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, services, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,$27,$28) RETURNING id",
+		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, dsJSON, svcJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
 	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
 	p.Datasources = dss
 	p.Services = uniq
@@ -363,6 +378,9 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	if !hasRetention { p.BackupRetentionDays = cur.BackupRetentionDays }
 	if p.Name == "" { p.Name = cur.Name }
 	if p.Desc == "" { p.Desc = cur.Desc }
+	// A bare path means the frontend echoed the logo URL back — keep current.
+	if strings.HasPrefix(p.IconURL, "/") { p.IconURL = "" }
+	if p.IconURL == "" { p.IconURL = cur.IconURL }
 	if p.Stack == "" { p.Stack = cur.Stack }
 	if p.Port == "" { p.Port = cur.Port }
 	if p.DB == "" { p.DB = cur.DB }
@@ -413,8 +431,14 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 			svcJSON = string(b)
 		}
 	}
-	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, stack=$4, port=$5, db_type=$6, dsn=$7, backend_url=$8, service_name=$9, base_path=$10, tags=$11::jsonb, offline_msg=$12, startup_command=$13, health_url=$14, backup_interval_hours=$15, backup_retention_days=$16, datasources=$17::jsonb, services=$18::jsonb WHERE id=$19",
-		p.Name, p.Desc, p.IconURL, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, dsJSON, svcJSON, id)
+	iconThumb := ""
+	if strings.HasPrefix(p.IconURL, "data:") && p.IconURL != cur.IconURL {
+		if t, err := makeThumb(p.IconURL, 128); err == nil && t != p.IconURL {
+			iconThumb = t
+		}
+	}
+	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, icon_thumb=COALESCE(NULLIF($4,''), icon_thumb), stack=$5, port=$6, db_type=$7, dsn=$8, backend_url=$9, service_name=$10, base_path=$11, tags=$12::jsonb, offline_msg=$13, startup_command=$14, health_url=$15, backup_interval_hours=$16, backup_retention_days=$17, datasources=$18::jsonb, services=$19::jsonb WHERE id=$20",
+		p.Name, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, dsJSON, svcJSON, id)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"updated": id})

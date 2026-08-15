@@ -396,6 +396,11 @@ func main() {
 	}
 	defer db.DB.Close()
 	auth.EnsureForgotSchema()
+	// Thumbnail columns + backfill for legacy rows (logo/avatar base64).
+	go func() {
+		time.Sleep(5 * time.Second)
+		handlers.EnsureThumbs()
+	}()
 
 	if lambsConfig.RuntimeBase == "" {
 		lambsConfig.RuntimeBase = "/home/ubuntu/apps"
@@ -465,6 +470,7 @@ func main() {
 	mux.HandleFunc("GET /api/gate/check-internal", auth.CORS(gate.HandleCheckInternal))
 	mux.HandleFunc("GET /api/gate/offline-page", auth.CORS(gate.HandleOfflinePage))
 	mux.HandleFunc("GET /api/gate/project-logo", auth.CORS(gate.HandleProjectLogo))
+	mux.HandleFunc("GET /api/projects/{id}/logo", auth.CORS(func(w http.ResponseWriter, r *http.Request) { handlers.ProjectLogo(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/auth/register", auth.CORS(credLimit(auth.HandleRegister)))
 	mux.HandleFunc("POST /api/auth/forgot-password/request", auth.CORS(credLimit(auth.HandleForgotRequest)))
 	mux.HandleFunc("POST /api/auth/forgot-password/verify", auth.CORS(credLimit(auth.HandleForgotVerify)))
