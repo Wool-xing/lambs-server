@@ -32,6 +32,7 @@ func EnsureForgotSchema() {
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`)
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`)
 	db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0`)
+	db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pwd_salt TEXT NOT NULL DEFAULT ''`)
 }
 
 func randomCode() (string, error) {
@@ -132,7 +133,13 @@ func HandleForgotVerify(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 400, fmt.Sprintf("验证码错误，剩余 %d 次尝试", maxAttempts-attempts-1))
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.NewPassword)), bcrypt.DefaultCost)
+	// R7: new client sends sha256(new+salt) (salt fetched via /auth/salt);
+	// legacy client sends plaintext — wrap once to keep the old shape.
+	newPayload := req.NewPassword
+	if !IsSHA256Hex(newPayload) {
+		newPayload = sha256Hex(newPayload)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPayload), bcrypt.DefaultCost)
 	if err != nil {
 		JSONErr(w, 500, "密码处理失败")
 		return

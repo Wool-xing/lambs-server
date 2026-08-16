@@ -1,6 +1,7 @@
 package auth
 
 import (
+	crand "crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -35,6 +36,52 @@ func init() {
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// newSaltHex returns a random 16-byte salt as a 32-char hex string. The salt
+// is public (stored per-user, returned by /auth/salt) — its job is to make a
+// single rainbow table useless across accounts (R7 salted client hashing).
+func NewSaltHex() string {
+	b := make([]byte, 16)
+	if _, err := crand.Read(b); err != nil {
+		log.Printf("newSaltHex: crypto/rand failed: %v", err)
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// isSHA256Hex reports whether s is a lowercase 64-char hex digest — the shape
+// the client sends after hashing (password + salt). Anything else is treated
+// as a legacy plaintext password.
+func IsSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// verifyPassword checks a login payload against the stored bcrypt hash.
+// New contract (R7): client sends sha256(password+salt), the DB stores
+// bcrypt(that payload). Legacy rows (salt='') store bcrypt(sha256(plain)),
+// and the legacy frontend sends plaintext — both match via the sha256Hex
+// wrap on the incoming value.
+// Returns ok=true on match; legacy=true when the legacy path matched and the
+// account should be upgraded to a salt.
+func verifyPassword(storedHash, payload string) (ok, legacy bool) {
+	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(payload)) == nil {
+		return true, false
+	}
+	// Legacy fallback: plaintext from the old frontend, or pre-salt rows
+	// verified against bcrypt(sha256(plain)).
+	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(sha256Hex(payload))) == nil {
+		return true, true
+	}
+	return false, false
 }
 
 // CORS returns middleware that sets CORS headers.
@@ -160,8 +207,9 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	_ = avatarURL
 	_ = lastLogin
 	var tokenVer int
-	err := db.DB.QueryRow("SELECT id, username, name, email, password_hash, role, status, COALESCE(token_version,0) FROM users WHERE username=$1",
-		req.Username).Scan(&user.ID, &user.Username, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.Status, &tokenVer)
+	var salt string
+	err := db.DB.QueryRow("SELECT id, username, name, email, password_hash, role, status, COALESCE(token_version,0), COALESCE(pwd_salt,'') FROM users WHERE username=$1",
+		req.Username).Scan(&user.ID, &user.Username, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.Status, &tokenVer, &salt)
 	if err != nil {
 		JSONErr(w, 401, "用户名或密码错误")
 		return
@@ -170,9 +218,19 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 403, "账号已停用")
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(sha256Hex(req.Password))) != nil {
+	ok, legacy := verifyPassword(user.PasswordHash, req.Password)
+	if !ok {
 		JSONErr(w, 401, "用户名或密码错误")
 		return
+	}
+	// Legacy account (no salt): upgrade in place to the salted contract so
+	// the next login only needs the new path (R7 transparent migration).
+	if legacy && salt == "" {
+		if ns := NewSaltHex(); ns != "" {
+			if h, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.Password + ns)), bcrypt.DefaultCost); err == nil {
+				db.DB.Exec("UPDATE users SET pwd_salt=$1, password_hash=$2 WHERE id=$3", ns, string(h), user.ID)
+			}
+		}
 	}
 	// Store UTC — the column is timestamp WITHOUT time zone and the frontend
 	// formats as UTC+8. A local-time value gets the +8 applied twice.
@@ -205,6 +263,18 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleSalt returns the account's public password salt so the client can
+// compute sha256(password+salt) before sending (R7). Unknown usernames get an
+// empty salt — no account enumeration beyond what login already reveals.
+func HandleSalt(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	var salt string
+	if username != "" {
+		db.DB.QueryRow("SELECT COALESCE(pwd_salt,'') FROM users WHERE username=$1", username).Scan(&salt)
+	}
+	JSONOK(w, map[string]string{"salt": salt})
+}
+
 // HandleRegister creates a viewer account with no project access. A
 // super_admin must grant project_access before the account can see anything —
 // registration alone opens no data.
@@ -213,6 +283,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		Salt     string `json:"salt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		JSONErr(w, 400, "无效请求")
@@ -236,14 +307,29 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 400, "密码至少6位")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.Password)), bcrypt.DefaultCost)
+	// R7 salted contract: the new client sends sha256(password+salt) with the
+	// salt it generated locally. A plaintext password (legacy client) keeps
+	// the old bcrypt(sha256(plain)) shape.
+	var salt string
+	if len(req.Salt) > 0 {
+		salt = req.Salt
+	}
+	if salt != "" && (len(salt) != 32 || !IsSHA256Hex(salt)) {
+		JSONErr(w, 400, "盐格式不正确")
+		return
+	}
+	payload := req.Password
+	if !IsSHA256Hex(payload) {
+		payload = sha256Hex(payload) // legacy plaintext → old shape
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(payload), bcrypt.DefaultCost)
 	if err != nil {
 		JSONErr(w, 500, "密码处理失败")
 		return
 	}
 	var id string
-	err = db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access) VALUES (gen_random_uuid(),$1,$2,$3,$4,'viewer','active','[]') RETURNING id::text",
-		req.Username, req.Username, req.Email, string(hash)).Scan(&id)
+	err = db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, pwd_salt) VALUES (gen_random_uuid(),$1,$2,$3,$4,'viewer','active','[]',$5) RETURNING id::text",
+		req.Username, req.Username, req.Email, string(hash), salt).Scan(&id)
 	if err != nil {
 		JSONErr(w, 400, "用户名或邮箱已被注册")
 		return
@@ -292,11 +378,17 @@ func HandleMePassword(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 404, "用户不存在")
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(sha256Hex(req.Old))) != nil {
+	if ok, _ := verifyPassword(hash, req.Old); !ok {
 		JSONErr(w, 400, "原密码错误")
 		return
 	}
-	newHash, err := bcrypt.GenerateFromPassword([]byte(sha256Hex(req.New)), bcrypt.DefaultCost)
+	// R7: the new client sends sha256(new+salt) for the new password; a
+	// legacy client sends plaintext — wrap it once to keep the old shape.
+	newPayload := req.New
+	if !IsSHA256Hex(newPayload) {
+		newPayload = sha256Hex(newPayload)
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPayload), bcrypt.DefaultCost)
 	if err != nil {
 		JSONErr(w, 500, "密码处理失败")
 		return
