@@ -89,3 +89,15 @@ func TestIsSHA256Hex(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSaltHex(t *testing.T) {
+	if !IsSaltHex(NewSaltHex()) {
+		t.Error("32-hex salt should pass")
+	}
+	if IsSaltHex(sha256Hex("x")) {
+		t.Error("64-hex is not a valid salt (R7 regression: salt validation used the 64-hex matcher)")
+	}
+	if IsSaltHex("zz" + NewSaltHex()[2:]) {
+		t.Error("non-hex salt should fail")
+	}
+}
