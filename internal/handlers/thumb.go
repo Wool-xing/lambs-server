@@ -191,6 +191,11 @@ func ProjectLogo(w http.ResponseWriter, r *http.Request, id string) {
 // EnsureThumbs adds thumb columns and backfills thumbnails for legacy rows
 // (rows created before thumbnails existed). Runs once at startup; new writes
 // generate thumbs inline in Create/Update handlers.
+// EnsureThumbs runs the schema part synchronously before the listener
+// starts — a delayed ALTER previously left a window where the first
+// requests hit a users table without the avatar_thumb column. The slow
+// backfill is separate (EnsureThumbsBackfill) so a large icon set or slow
+// DB cannot block the HTTP listener from coming up.
 func EnsureThumbs() {
 	if _, err := db.DB.Exec(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS icon_thumb TEXT`); err != nil {
 		log.Printf("EnsureThumbs: projects alter failed: %v", err)
@@ -200,7 +205,11 @@ func EnsureThumbs() {
 		log.Printf("EnsureThumbs: users alter failed: %v", err)
 		return
 	}
+}
 
+// EnsureThumbsBackfill regenerates thumbnails for legacy base64 rows. Safe to
+// run concurrently with traffic: it only fills empty icon_thumb/avatar_thumb.
+func EnsureThumbsBackfill() {
 	rows, err := db.DB.Query("SELECT id, COALESCE(icon_url,''), COALESCE(icon_thumb,'') FROM projects WHERE icon_url LIKE 'data:%' AND (icon_thumb IS NULL OR icon_thumb = '')")
 	if err != nil {
 		log.Printf("EnsureThumbs: query failed: %v", err)
@@ -220,7 +229,9 @@ func EnsureThumbs() {
 	rows.Close()
 	for _, p := range jobs {
 		if t, err := makeThumb(p.icon, 128); err == nil && t != p.icon {
-			if _, err := db.DB.Exec("UPDATE projects SET icon_thumb=$1 WHERE id=$2", t, p.id); err != nil {
+			// Guarded UPDATE: a concurrent icon_url change must not be
+			// overwritten by a thumb generated from the stale value.
+			if _, err := db.DB.Exec("UPDATE projects SET icon_thumb=$1 WHERE id=$2 AND (icon_thumb IS NULL OR icon_thumb = '')", t, p.id); err != nil {
 				log.Printf("EnsureThumbs: update %s failed: %v", p.id, err)
 			}
 		}
@@ -241,7 +252,7 @@ func EnsureThumbs() {
 	}
 	for _, u := range ujobs {
 		if t, err := makeThumb(u.av, 128); err == nil && t != u.av {
-			db.DB.Exec("UPDATE users SET avatar_thumb=$1 WHERE id=$2", t, u.id)
+			db.DB.Exec("UPDATE users SET avatar_thumb=$1 WHERE id=$2 AND (avatar_thumb IS NULL OR avatar_thumb = '')", t, u.id)
 		}
 	}
 }

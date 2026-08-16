@@ -396,11 +396,19 @@ func main() {
 	}
 	defer db.DB.Close()
 	auth.EnsureForgotSchema()
-	// Thumbnail columns + backfill for legacy rows (logo/avatar base64).
-	// Run synchronously before the listener starts: a 5s-delayed ALTER left
-	// a window where the first requests hit a users table without the
-	// avatar_thumb column and ListUsers silently returned empty rows.
+	// Thumbnail columns synchronously before the listener starts (a delayed
+	// ALTER once left the users table without avatar_thumb and ListUsers
+	// returned empty rows). The legacy backfill runs in the background so a
+	// slow DB or large icon set cannot block the listener from coming up.
 	handlers.EnsureThumbs()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("EnsureThumbsBackfill panic: %v", r)
+			}
+		}()
+		handlers.EnsureThumbsBackfill()
+	}()
 
 	if lambsConfig.RuntimeBase == "" {
 		lambsConfig.RuntimeBase = "/home/ubuntu/apps"
