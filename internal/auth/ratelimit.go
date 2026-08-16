@@ -10,7 +10,7 @@ import (
 )
 
 // loginLimiter is a per-IP sliding-window limiter for credential endpoints.
-// nginx already rate-limits /lambs/api/auth/login — this is the second layer
+// nginx already rate-limits /Lambs/api/auth/login — this is the second layer
 // for direct :3602 access.
 var loginLimiter = struct {
 	sync.Mutex

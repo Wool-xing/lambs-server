@@ -471,7 +471,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Public. Credential endpoints get a second rate-limit layer (nginx
-	// already limits /lambs/api/auth/login) for direct :3602 access.
+	// already limits /Lambs/api/auth/login) for direct :3602 access.
 	credLimit := auth.RateLimit(5, time.Minute)
 	mux.HandleFunc("POST /api/auth/login", auth.CORS(credLimit(auth.HandleLogin)))
 	mux.HandleFunc("GET /api/health", auth.CORS(handleHealth))

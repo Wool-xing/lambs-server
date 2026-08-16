@@ -56,7 +56,11 @@ func CheckDSNHost(dsn string) error {
 		// every entry must pass the guard, not just the first (R5 C5).
 		if host != "" && strings.Contains(host, ",") {
 			for _, h := range strings.Split(host, ",") {
-				if err := checkHostPublic(strings.TrimSpace(h)); err != nil {
+				h = strings.TrimSpace(h)
+				if h == "" {
+					continue // trailing comma / empty entry — nothing to check
+				}
+				if err := checkHostPublic(h); err != nil {
 					return err
 				}
 			}
