@@ -83,7 +83,8 @@ func RestoreBackup(w http.ResponseWriter, r *http.Request, id, filename string) 
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		auth.JSONErr(w, 500, "恢复失败: "+strings.TrimSpace(errBuf.String()))
+		log.Printf("restore backup: %s", strings.TrimSpace(errBuf.String()))
+		auth.JSONErr(w, 500, "恢复失败")
 		return
 	}
 	auth.JSONOK(w, map[string]string{"restored": filename})
@@ -103,7 +104,7 @@ func UploadBackupToTG(w http.ResponseWriter, r *http.Request, id, file string) {
 	if err != nil { auth.JSONErr(w, 404, "备份不存在"); return }
 	caption := fmt.Sprintf("Backup: %s @ %s", id, time.Now().Format("2006-01-02 15:04"))
 	result, err := tgbackup.Upload(fpath, caption)
-	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
+	if err != nil { log.Printf("tg upload: %v", err); auth.JSONErr(w, 500, "上传失败，请稍后再试"); return }
 	auth.JSONOK(w, result)
 }
 
@@ -120,10 +121,11 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 		var errBuf bytes.Buffer
 		cmd.Stderr = &errBuf
 		if err := cmd.Run(); err != nil {
-			return map[string]interface{}{"ok": false, "error": "sqlite backup: " + strings.TrimSpace(errBuf.String())}
+			log.Printf("sqlite backup: %s", strings.TrimSpace(errBuf.String()))
+			return map[string]interface{}{"ok": false, "error": "备份执行失败"}
 		}
 		info, err := os.Stat(fpath)
-		if err != nil { return map[string]interface{}{"ok": false, "error": err.Error()} }
+		if err != nil { log.Printf("backup stat: %v", err); return map[string]interface{}{"ok": false, "error": "备份失败"} }
 		return map[string]interface{}{"ok": true, "filename": fname + ".db", "size_mb": float64(info.Size()) / (1024 * 1024)}
 	}
 	if strings.Contains(dsn, "postgresql") || strings.Contains(dsn, "postgres") {
@@ -142,7 +144,7 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 		cmd := exec.Command("pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname, "-f", fpath, "--no-owner", "--no-acl")
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
 		out, err := cmd.CombinedOutput()
-		if err != nil { return map[string]interface{}{"ok": false, "error": string(out) + err.Error()} }
+		if err != nil { log.Printf("pg_dump: %s %v", string(out), err); return map[string]interface{}{"ok": false, "error": "备份执行失败"} }
 		info, _ := os.Stat(fpath)
 		return map[string]interface{}{"ok": true, "filename": fname + ".sql", "size_mb": float64(info.Size()) / (1024 * 1024)}
 	}

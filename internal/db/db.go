@@ -64,7 +64,9 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 	if strings.HasPrefix(dsn, "http") {
 		resp, err := httpClient.Get(dsn)
 		if err != nil {
-			return map[string]interface{}{"reachable": false, "error": err.Error()}
+			// Go's url.Error embeds the full URL — userinfo credentials included.
+			log.Printf("testDSN http: %v", err)
+			return map[string]interface{}{"reachable": false, "error": "连接失败"}
 		}
 		resp.Body.Close()
 		return map[string]interface{}{"reachable": resp.StatusCode < 500, "latency_ms": 0, "db_type": "rest_api"}
@@ -80,7 +82,8 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 				return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "postgresql"}
 			}
 		}
-		return map[string]interface{}{"reachable": false, "error": err.Error()}
+		log.Printf("testDSN postgres: %v", err)
+		return map[string]interface{}{"reachable": false, "error": "连接失败"}
 	}
 	// SQLite: file existence check
 	if strings.Contains(dsn, "sqlite") {
@@ -91,7 +94,8 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		if _, se := os.Stat(path); se == nil {
 			return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "sqlite"}
 		} else {
-			return map[string]interface{}{"reachable": false, "error": se.Error(), "db_type": "sqlite"}
+			log.Printf("testDSN sqlite stat: %v", se)
+			return map[string]interface{}{"reachable": false, "error": "连接失败", "db_type": "sqlite"}
 		}
 	}
 	// MySQL: TCP health check (no driver needed)
@@ -107,7 +111,8 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		}
 		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
 		if err != nil {
-			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "mysql"}
+			log.Printf("testDSN mysql: %v", err)
+			return map[string]interface{}{"reachable": false, "error": "连接失败", "db_type": "mysql"}
 		}
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mysql"}
@@ -120,7 +125,8 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		}
 		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
 		if err != nil {
-			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "mongodb"}
+			log.Printf("testDSN mongodb: %v", err)
+			return map[string]interface{}{"reachable": false, "error": "连接失败", "db_type": "mongodb"}
 		}
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mongodb"}
@@ -133,7 +139,8 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		}
 		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
 		if err != nil {
-			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "qdrant"}
+			log.Printf("testDSN qdrant: %v", err)
+			return map[string]interface{}{"reachable": false, "error": "连接失败", "db_type": "qdrant"}
 		}
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "qdrant"}
@@ -146,7 +153,8 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		}
 		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
 		if err != nil {
-			return map[string]interface{}{"reachable": false, "error": err.Error(), "db_type": "redis"}
+			log.Printf("testDSN redis: %v", err)
+			return map[string]interface{}{"reachable": false, "error": "连接失败", "db_type": "redis"}
 		}
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "redis"}
