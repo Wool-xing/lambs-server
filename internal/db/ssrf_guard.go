@@ -45,30 +45,80 @@ func CheckDSNHost(dsn string) error {
 	return checkHostPublic(host)
 }
 
-func checkHostPublic(host string) error {
+// resolvePublicHosts validates a hostname and returns its resolved IPs.
+// Loopback is allowed (managed datasources legitimately run on the server
+// itself); the guard's job is to stop probes into OTHER hosts' private
+// networks (RFC1918, link-local, unspecified, ULA fc00::/7).
+func resolvePublicHosts(host string) ([]net.IP, error) {
 	host = strings.Trim(host, "[]")
 	if host == "localhost" {
-		return nil // same-host datasources are legitimate (redis on 127.0.0.1 etc.)
+		// Deterministic pin (no resolver variance). Note: services bound only
+		// to ::1 (IPv6 loopback) are not reachable via this rewrite.
+		host = "127.0.0.1"
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		return fmt.Errorf("禁止访问无法解析的地址: %s", host)
+		return nil, fmt.Errorf("禁止访问无法解析的地址: %s", host)
 	}
 	for _, ip := range ips {
-		// Loopback is allowed: several managed datasources legitimately run
-		// on the server itself. The guard's job is to stop probes into
-		// OTHER hosts' private networks.
 		if ip.IsLoopback() {
 			continue
 		}
 		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return fmt.Errorf("禁止访问内网地址: %s", host)
+			return nil, fmt.Errorf("禁止访问内网地址: %s", host)
 		}
 		if ip.IsPrivate() {
-			return fmt.Errorf("禁止访问内网地址: %s", host)
+			return nil, fmt.Errorf("禁止访问内网地址: %s", host)
 		}
 		if ip.To4() == nil && (ip[0]&0xFE) == 0xFC { // ULA fc00::/7
-			return fmt.Errorf("禁止访问内网地址: %s", host)
+			return nil, fmt.Errorf("禁止访问内网地址: %s", host)
+		}
+	}
+	return ips, nil
+}
+
+func checkHostPublic(host string) error {
+	_, err := resolvePublicHosts(host)
+	return err
+}
+
+// pinHostToIP rewrites the host of URL-form DSNs (http, qdrant, redis) to a
+// validated IP from the guard's resolution, closing the DNS-rebinding window
+// between CheckDSNHost and the later dial (R3-3). postgres/mysql/mongo/https
+// are left untouched: their drivers dial independently, and https certificate
+// verification binds to the hostname (residual risk, documented).
+func pinHostToIP(dsn string) (string, error) {
+	lower := strings.ToLower(dsn)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "qdrant") &&
+		!strings.HasPrefix(lower, "redis") {
+		return dsn, nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Hostname() == "" {
+		return dsn, nil
+	}
+	ips, err := resolvePublicHosts(u.Hostname())
+	if err != nil {
+		return dsn, err
+	}
+	ip := pickIPv4(ips)
+	if ip == nil || ip.String() == u.Hostname() {
+		return dsn, nil // already an IP literal or no IPv4 to pin
+	}
+	host := ip.String()
+	if u.Port() != "" {
+		host = net.JoinHostPort(host, u.Port())
+	}
+	u.Host = host
+	return u.String(), nil
+}
+
+// pickIPv4 prefers an IPv4 address; an IPv6-only host returns nil so the
+// hostname stays untouched (a bare IPv6 in the URL would break url.Parse).
+func pickIPv4(ips []net.IP) net.IP {
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip
 		}
 	}
 	return nil
