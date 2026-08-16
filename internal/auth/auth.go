@@ -387,10 +387,11 @@ func HandleMePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// R7: the new client sends sha256(new+salt) for the new password; a
-	// legacy client sends plaintext — wrap it once to keep the old shape.
+	// legacy client sends plaintext — wrap it once WITH the account salt
+	// (wrapping without salt would lock the account out, R7 code review).
 	newPayload := req.New
 	if !IsSHA256Hex(newPayload) {
-		newPayload = sha256Hex(newPayload)
+		newPayload = sha256Hex(newPayload + salt)
 	}
 	newHash, err := bcrypt.GenerateFromPassword([]byte(newPayload), bcrypt.DefaultCost)
 	if err != nil {
