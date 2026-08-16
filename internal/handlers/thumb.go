@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"lambs-server-go/internal/db"
@@ -143,17 +144,29 @@ func DataURLBytes(data string) ([]byte, string, bool) {
 	}
 	semi := strings.Index(data, ";")
 	comma := strings.Index(data, ",")
-	if semi < 0 || comma < 0 || comma < semi {
+	if comma < 0 || comma < 5 || (semi >= 0 && comma < semi) {
 		return nil, "", false
 	}
-	ct := data[5:semi]
+	// No ";" means no parameters: data:image/svg+xml,<raw> — the media type
+	// runs straight to the comma.
+	ct := data[5:comma]
+	if semi >= 0 {
+		ct = data[5:semi]
+	}
 	switch ct {
 	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/svg+xml":
 	default:
 		return nil, "", false
 	}
 	if !strings.HasPrefix(data[semi+1:], "base64") {
-		return nil, "", false
+		// Non-base64 data URL (e.g. data:image/svg+xml,<svg ...>) — the
+		// payload is raw (percent-encoded) text after the comma. SVGs saved
+		// without base64 previously 404'd (R3-P2).
+		raw, err := url.QueryUnescape(data[comma+1:])
+		if err != nil {
+			return nil, "", false
+		}
+		return []byte(raw), ct, true
 	}
 	raw, err := base64.StdEncoding.DecodeString(data[comma+1:])
 	if err != nil {
