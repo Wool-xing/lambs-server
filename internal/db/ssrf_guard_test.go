@@ -21,7 +21,9 @@ func TestCheckDSNHost(t *testing.T) {
 		{"ten-blocked", "redis://10.0.0.5:6379", true},
 		{"metadata blocked", "http://169.254.169.254/latest/meta-data", true},
 		{"mysql tcp blocked", "u:p@tcp(172.16.0.2:3306)/db", true},
-		{"public ok", "http://example.com/api", false},
+		// IP literal: net.LookupIP short-circuits without a resolver, so the
+		// guard suite no longer needs online DNS (R3-P3: offline CI broke here).
+		{"public ok", "http://93.184.216.34/api", false},
 		{"qdrant loopback ok", "qdrant://127.0.0.1:6333", false},
 		{"qdrant tailscale ok", "qdrant://100.92.91.11:6333", false},
 		{"qdrant private blocked", "qdrant://169.254.169.254:6333", true},
