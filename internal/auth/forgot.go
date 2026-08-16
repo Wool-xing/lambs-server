@@ -134,10 +134,13 @@ func HandleForgotVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// R7: new client sends sha256(new+salt) (salt fetched via /auth/salt);
-	// legacy client sends plaintext — wrap once to keep the old shape.
+	// legacy client sends plaintext — wrap once WITH the account salt
+	// (wrapping without salt would lock the account out, R7 code review).
 	newPayload := req.NewPassword
 	if !IsSHA256Hex(newPayload) {
-		newPayload = sha256Hex(newPayload)
+		var salt string
+		db.DB.QueryRow("SELECT COALESCE(pwd_salt,'') FROM users WHERE username=$1", req.Username).Scan(&salt)
+		newPayload = sha256Hex(newPayload + salt)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPayload), bcrypt.DefaultCost)
 	if err != nil {

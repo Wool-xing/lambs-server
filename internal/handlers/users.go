@@ -162,10 +162,14 @@ func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.NewPassword == "" { auth.JSONErr(w, 400, "请输入新密码"); return }
 	if len(req.NewPassword) < 6 { auth.JSONErr(w, 400, "新密码至少6位"); return }
-	// R7: salted client payload keeps its shape; legacy plaintext wraps once.
+	// R7: salted client payload keeps its shape; legacy plaintext wraps once
+	// WITH the account's existing salt — wrapping without it would lock the
+	// account out of both contracts (R7 code review).
 	payload := req.NewPassword
 	if !auth.IsSHA256Hex(payload) {
-		payload = sha256Hex(payload)
+		var salt string
+		db.DB.QueryRow("SELECT COALESCE(pwd_salt,'') FROM users WHERE id=$1", id).Scan(&salt)
+		payload = sha256Hex(payload + salt)
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte(payload), bcrypt.DefaultCost)
 	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(hash), id); err != nil {
