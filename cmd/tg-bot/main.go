@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -68,6 +69,9 @@ func loadSecrets() {
 	}
 	if token == "" {
 		log.Fatal("TG_BOT_TOKEN not set")
+	}
+	if webhookSecret == "" {
+		log.Fatal("TG_WEBHOOK_SECRET not set")
 	}
 }
 
@@ -365,8 +369,10 @@ func webhookServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		received := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
-		// Fail-closed: without a configured secret, reject webhook calls.
-		if webhookSecret == "" || received != webhookSecret {
+		// Constant-time compare (secret missing is fatal at startup, so a
+		// length mismatch alone already fails the comparison).
+		if subtle.ConstantTimeCompare([]byte(received), []byte(webhookSecret)) != 1 {
+			log.Printf("webhook: 403 bad secret from %s", r.RemoteAddr)
 			w.WriteHeader(403)
 			w.Write([]byte(`{"ok":false}`))
 			return
