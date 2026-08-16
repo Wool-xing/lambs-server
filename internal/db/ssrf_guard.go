@@ -39,6 +39,17 @@ func CheckDSNHost(dsn string) error {
 			host = h
 		}
 	}
+	if host == "" && !strings.Contains(dsn, "://") {
+		// lib/pq keyword form (no scheme): "host=10.0.0.5 port=5432 ...".
+		// Values may be quoted. dsn is already lowercased above.
+		for _, f := range strings.Fields(dsn) {
+			kv := strings.SplitN(f, "=", 2)
+			if len(kv) == 2 && kv[0] == "host" {
+				host = strings.Trim(kv[1], `'"`)
+				break
+			}
+		}
+	}
 	if host == "" {
 		return nil // unknown form — leave to the dialer
 	}

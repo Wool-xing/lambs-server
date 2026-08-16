@@ -27,6 +27,10 @@ func TestCheckDSNHost(t *testing.T) {
 		{"qdrant private blocked", "qdrant://169.254.169.254:6333", true},
 		{"uppercase scheme bypass blocked", "Mongo://169.254.169.254:27017/db", true},
 		{"uppercase qdrant bypass blocked", "QDRANT://169.254.169.254:6333", true},
+		{"postgres keyword private blocked", "host=10.0.0.5 port=5432 user=u dbname=d", true},
+		{"postgres keyword quoted private blocked", "host='192.168.1.9' port=5432 user=u", true},
+		{"postgres keyword tailscale ok", "host=100.92.91.11 port=5432 user=u", false},
+		{"postgres keyword loopback ok", "host=127.0.0.1 port=5432 user=u", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -108,6 +112,7 @@ func TestNewDataSourceSSRFGuard(t *testing.T) {
 		{"metadata blocked", "http://169.254.169.254/latest/meta-data", true},
 		{"qdrant loopback allowed", "qdrant://127.0.0.1:6333", false},
 		{"qdrant private blocked", "qdrant://169.254.169.254:6333", true},
+		{"postgres keyword private blocked", "host=10.0.0.5 port=5432 user=u dbname=d", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
