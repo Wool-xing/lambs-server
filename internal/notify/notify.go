@@ -21,23 +21,26 @@ func NotifyAdmin(subject, body string) {
 	if config == nil || config.AdminEmail == "" {
 		return
 	}
-	SendMail(config.AdminEmail, subject, body)
+	if err := SendMail(config.AdminEmail, subject, body); err != nil {
+		log.Printf("notify: admin mail failed: %v", err)
+	}
 }
 
-// SendMailForget sends a password-reset email and errors when SMTP is not configured.
+// SendMailForget sends a password-reset email. Errors are returned so the
+// caller can tell the user the truth — a configured-but-failing SMTP must not
+// report "验证码已发送" (R8: the old silent-swallow burned codes + cooldown).
 func SendMailForget(to, subject, body string) error {
 	if config == nil || config.SMTPHost == "" || config.SMTPFrom == "" {
 		return fmt.Errorf("邮件服务未配置，请联系管理员重置密码")
 	}
-	SendMail(to, subject, body)
-	return nil
+	return SendMail(to, subject, body)
 }
 
-// SendMail sends a plain-text email over SMTP with STARTTLS.
-// Silently skips if SMTP is not configured.
-func SendMail(to, subject, body string) {
+// SendMail sends a plain-text email over SMTP with mandatory STARTTLS.
+// All failures are returned (logged by the caller as needed).
+func SendMail(to, subject, body string) error {
 	if config == nil || config.SMTPHost == "" || config.SMTPFrom == "" || to == "" {
-		return
+		return fmt.Errorf("smtp not configured")
 	}
 	addr := config.SMTPHost + ":" + config.SMTPPort
 	var auth smtp.Auth
@@ -47,39 +50,35 @@ func SendMail(to, subject, body string) {
 
 	c, err := smtp.Dial(addr)
 	if err != nil {
-		log.Printf("notify: smtp dial failed: %v", err)
-		return
+		return fmt.Errorf("smtp dial: %w", err)
 	}
 	defer c.Close()
 	if err := c.Hello("lambs"); err != nil {
-		log.Printf("notify: smtp hello failed: %v", err)
-		return
+		return fmt.Errorf("smtp hello: %w", err)
 	}
-	// Upgrade to TLS if server supports STARTTLS
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(&tls.Config{ServerName: config.SMTPHost}); err != nil {
-			log.Printf("notify: starttls failed: %v", err)
-			return
-		}
+	// STARTTLS is mandatory: credentials must never cross the wire in
+	// plaintext even against a misconfigured server (R8).
+	ok, _ := c.Extension("STARTTLS")
+	if !ok {
+		return fmt.Errorf("smtp server does not support STARTTLS")
+	}
+	if err := c.StartTLS(&tls.Config{ServerName: config.SMTPHost}); err != nil {
+		return fmt.Errorf("smtp starttls: %w", err)
 	}
 	if auth != nil {
 		if err := c.Auth(auth); err != nil {
-			log.Printf("notify: smtp auth failed: %v", err)
-			return
+			return fmt.Errorf("smtp auth: %w", err)
 		}
 	}
 	if err := c.Mail(config.SMTPFrom); err != nil {
-		log.Printf("notify: smtp mail failed: %v", err)
-		return
+		return fmt.Errorf("smtp mail: %w", err)
 	}
 	if err := c.Rcpt(to); err != nil {
-		log.Printf("notify: smtp rcpt failed: %v", err)
-		return
+		return fmt.Errorf("smtp rcpt: %w", err)
 	}
 	w, err := c.Data()
 	if err != nil {
-		log.Printf("notify: smtp data failed: %v", err)
-		return
+		return fmt.Errorf("smtp data: %w", err)
 	}
 	msg := "From: " + config.SMTPFrom + "\r\n" +
 		"To: " + to + "\r\n" +
@@ -88,16 +87,14 @@ func SendMail(to, subject, body string) {
 		"Content-Type: text/plain; charset=utf-8\r\n\r\n" +
 		body + "\r\n"
 	if _, err := w.Write([]byte(msg)); err != nil {
-		log.Printf("notify: smtp write failed: %v", err)
-		return
+		return fmt.Errorf("smtp write: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		log.Printf("notify: smtp close failed: %v", err)
-		return
+		return fmt.Errorf("smtp close: %w", err)
 	}
 	if err := c.Quit(); err != nil {
-		log.Printf("notify: smtp quit failed: %v", err)
-		return
+		return fmt.Errorf("smtp quit: %w", err)
 	}
 	log.Printf("notify: email sent to %s: %s", to, subject)
+	return nil
 }
