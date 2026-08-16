@@ -33,6 +33,9 @@ func TestCheckDSNHost(t *testing.T) {
 		{"postgres keyword quoted private blocked", "host='192.168.1.9' port=5432 user=u", true},
 		{"postgres keyword tailscale ok", "host=100.92.91.11 port=5432 user=u", false},
 		{"postgres keyword loopback ok", "host=127.0.0.1 port=5432 user=u", false},
+		{"postgres keyword password-with-scheme blocked", "host=192.168.1.5 port=5432 user=u password='x://y'", true},
+		{"postgres keyword host-list public ok", "host=100.92.91.11,127.0.0.1 port=5432 user=u", false},
+		{"postgres keyword host-list private blocked", "host=100.92.91.11,192.168.1.5 port=5432 user=u", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

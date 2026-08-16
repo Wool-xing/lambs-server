@@ -385,7 +385,10 @@ func webhookServer() {
 		}
 	})
 	log.Println("webhook: listening on :3601 (sleep mode)")
-	http.ListenAndServe(":3601", mux)
+	// Port-in-use must not leave wake-ups silently dead (R5 C6).
+	if err := http.ListenAndServe(":3601", mux); err != nil {
+		log.Fatal("webhook server failed:", err)
+	}
 }
 // ── Polling loop ────────────────────────────────────────
 
