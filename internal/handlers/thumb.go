@@ -205,6 +205,12 @@ func EnsureThumbs() {
 		log.Printf("EnsureThumbs: users alter failed: %v", err)
 		return
 	}
+	// Legacy rows from an old frontend stored the literal string 'null' as
+	// avatar_url — normalize to '' so every read path (ListUsers, auth/me,
+	// project members) never serves "null" as an image URL (R3 P2).
+	if _, err := db.DB.Exec(`UPDATE users SET avatar_url='' WHERE avatar_url='null'`); err != nil {
+		log.Printf("EnsureThumbs: null-avatar cleanup failed: %v", err)
+	}
 }
 
 // EnsureThumbsBackfill regenerates thumbnails for legacy base64 rows. Safe to
