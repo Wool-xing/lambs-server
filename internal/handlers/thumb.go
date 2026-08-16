@@ -167,9 +167,13 @@ func DataURLBytes(data string) ([]byte, string, bool) {
 	default:
 		return nil, "", false
 	}
-	// "base64" may sit after other params (charset=utf-8;base64) — check the
-	// whole parameter section, not just the first segment (R5 C1).
-	if !strings.Contains(data[semi+1:comma], "base64") {
+	// "base64" must be the exact LAST parameter segment (charset=utf-8;base64) —
+	// substring/suffix matches would misfire on values like ;note=xbase64 (R5 C1, R6).
+	seg := data[semi+1 : comma]
+	if i := strings.LastIndexByte(seg, ';'); i >= 0 {
+		seg = seg[i+1:]
+	}
+	if seg != "base64" {
 		// Non-base64 data URL (e.g. data:image/svg+xml,<svg ...>) — the
 		// payload is raw (percent-encoded) text after the comma. SVGs saved
 		// without base64 previously 404'd (R3-P2).
@@ -255,6 +259,9 @@ func EnsureThumbsBackfill() {
 			continue
 		}
 		jobs = append(jobs, p)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("EnsureThumbs: projects rows error: %v", err)
 	}
 	rows.Close()
 	for _, p := range jobs {

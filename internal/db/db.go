@@ -318,6 +318,12 @@ func SyncUserCount(dsn string) int {
 	if dsn == "" || dsn == "—" {
 		return 0
 	}
+	// SSRF guard — this path dials directly and was missed by the R3-2
+	// "all dial paths" sweep (R6 security).
+	if err := CheckDSNHost(dsn); err != nil {
+		log.Printf("SyncUserCount: guard rejected dsn: %v", err)
+		return 0
+	}
 	dsn2 := strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
 	dsn2 = strings.Replace(dsn2, "sqlite:///", "", 1)
 	if strings.Contains(dsn, "postgres") {

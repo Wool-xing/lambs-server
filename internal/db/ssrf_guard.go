@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -23,6 +24,15 @@ func CheckDSNHost(dsn string) error {
 		strings.HasPrefix(dsn, "postgres") || strings.HasPrefix(dsn, "qdrant") {
 		if u, err := url.Parse(dsn); err == nil && u.Hostname() != "" {
 			host = u.Hostname()
+			// lib/pq convertURL promotes query params to keyword args —
+			// ?hostaddr=10.0.0.5 overrides the URL host at dial time (R6).
+			for _, k := range []string{"host", "hostaddr"} {
+				if q := u.Query().Get(k); q != "" {
+					if err := checkHostPublic(q); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
 	if host == "" {
@@ -40,22 +50,14 @@ func CheckDSNHost(dsn string) error {
 		}
 	}
 	if host == "" {
-		// lib/pq keyword form: "host=10.0.0.5 port=5432 ...". Values may be
-		// quoted. dsn is already lowercased above. No "://" gate here: a
-		// password containing "://" must not skip host extraction (the old
-		// gate relied on SplitHostPort accidentally treating the whole string
-		// as host — explicit extraction is the stable fail-closed path).
-		for _, f := range strings.Fields(dsn) {
-			kv := strings.SplitN(f, "=", 2)
-			if len(kv) == 2 && kv[0] == "host" {
-				host = strings.Trim(kv[1], `'"`)
-				break
-			}
-		}
-		// lib/pq accepts a comma-separated host list as a failover chain —
-		// every entry must pass the guard, not just the first (R5 C5).
-		if host != "" && strings.Contains(host, ",") {
-			for _, h := range strings.Split(host, ",") {
+		// lib/pq keyword form: "host=10.0.0.5 port=5432 ...". Collect EVERY
+		// host=/hostaddr= occurrence — lib/pq parses duplicate keys with
+		// last-wins, and hostaddr takes dial precedence over host, so a
+		// single checked entry is not enough (R6). Values may be quoted and
+		// '=' may be surrounded by spaces.
+		for _, m := range keywordHostRe.FindAllStringSubmatch(dsn, -1) {
+			v := strings.Trim(m[2], `'"`)
+			for _, h := range strings.Split(v, ",") {
 				h = strings.TrimSpace(h)
 				if h == "" {
 					continue // trailing comma / empty entry — nothing to check
@@ -64,14 +66,19 @@ func CheckDSNHost(dsn string) error {
 					return err
 				}
 			}
-			return nil
 		}
+		return nil // keyword form fully judged above (fail-closed per entry)
 	}
 	if host == "" {
 		return nil // unknown form — leave to the dialer
 	}
 	return checkHostPublic(host)
 }
+
+// keywordHostRe matches host=/hostaddr= keyword assignments in lib/pq DSNs
+// (dsn is lowercased before matching). lib/pq trims spaces around '=' and
+// accepts quoted values.
+var keywordHostRe = regexp.MustCompile(`(?:^|\s)(host|hostaddr)\s*=\s*('[^']*'|"[^"]*"|\S+)`)
 
 // resolvePublicHosts validates a hostname and returns its resolved IPs.
 // Loopback is allowed (managed datasources legitimately run on the server

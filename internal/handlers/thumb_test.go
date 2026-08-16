@@ -28,6 +28,7 @@ func TestDataURLBytes(t *testing.T) {
 		{"bad base64", "data:image/png;base64,!!!not-base64!!!", "", nil, false},
 		{"svg raw (no base64)", "data:image/svg+xml,<svg></svg>", "image/svg+xml", []byte("<svg></svg>"), true},
 		{"svg with charset param", "data:image/svg+xml;charset=utf-8;base64," + base64.StdEncoding.EncodeToString([]byte("<svg></svg>")), "image/svg+xml", []byte("<svg></svg>"), true},
+		{"svg note-param containing base64", "data:image/svg+xml;note=xbase64,<svg></svg>", "image/svg+xml", []byte("<svg></svg>"), true},
 		{"svg raw pct-encoded", "data:image/svg+xml,%3Csvg%3E%3C/svg%3E", "image/svg+xml", []byte("<svg></svg>"), true},
 		{"html raw rejected", "data:text/html,<script>alert(1)</script>", "", nil, false},
 		{"oversized rejected", "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 8<<20+1)), "", nil, false},
