@@ -26,6 +26,9 @@ func TestDataURLBytes(t *testing.T) {
 		{"empty", "", "", nil, false},
 		{"not data url", "https://x/y.png", "", nil, false},
 		{"bad base64", "data:image/png;base64,!!!not-base64!!!", "", nil, false},
+		{"svg raw (no base64)", "data:image/svg+xml,<svg></svg>", "image/svg+xml", []byte("<svg></svg>"), true},
+		{"svg raw pct-encoded", "data:image/svg+xml,%3Csvg%3E%3C/svg%3E", "image/svg+xml", []byte("<svg></svg>"), true},
+		{"html raw rejected", "data:text/html,<script>alert(1)</script>", "", nil, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
