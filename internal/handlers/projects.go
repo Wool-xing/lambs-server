@@ -476,7 +476,8 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, icon_thumb, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, services, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,$27,$28) RETURNING id",
 		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, dsJSON, svcJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
 	if err != nil {
-		auth.JSONErr(w, 400, "创建失败: "+err.Error())
+		log.Printf("CreateProject insert: %v", err)
+		auth.JSONErr(w, 400, "创建失败")
 		return
 	}
 	p.Datasources = dss
@@ -946,7 +947,8 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 		data, cols, pk, err = src.ReadItems(table, limit, offset)
 	}
 	if err != nil {
-		auth.JSONErr(w, 500, err.Error())
+		log.Printf("ProjectTables read: %v", err)
+		auth.JSONErr(w, 500, "读取数据失败")
 		return
 	}
 	// Single-point redaction: never expose password/token values through the
@@ -1034,7 +1036,8 @@ func ListTableNames(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	tables, err := src.ListCollections()
 	if err != nil {
-		auth.JSONErr(w, 500, err.Error())
+		log.Printf("ListTableNames: %v", err)
+		auth.JSONErr(w, 500, "读取表列表失败")
 		return
 	}
 	if tables == nil {
@@ -1124,12 +1127,14 @@ func UpdateTableRow(w http.ResponseWriter, r *http.Request, id string) {
 	if pkVal == "" {
 		// Empty pkval = insert new row (sources like Qdrant generate their own IDs)
 		if err := src.InsertItem(table, row); err != nil {
-			auth.JSONErr(w, 500, err.Error())
+			log.Printf("InsertTableRow: %v", err)
+			auth.JSONErr(w, 500, "新增数据失败")
 			return
 		}
 		auditLog(r, "新增数据", id, fmt.Sprintf("table=%s", table))
 	} else if err := src.UpdateItem(table, pkCol, pkVal, row); err != nil {
-		auth.JSONErr(w, 500, err.Error())
+		log.Printf("UpdateTableRow: %v", err)
+		auth.JSONErr(w, 500, "更新数据失败")
 		return
 	} else {
 		auditLog(r, "修改数据", id, fmt.Sprintf("table=%s pk=%s=%s", table, pkCol, pkVal))
@@ -1174,7 +1179,8 @@ func DeleteTableRow(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if err := src.DeleteItem(table, pkCol, pkVal); err != nil {
-		auth.JSONErr(w, 500, err.Error())
+		log.Printf("DeleteTableRow: %v", err)
+		auth.JSONErr(w, 500, "删除数据失败")
 		return
 	}
 	auditLog(r, "删除数据", id, fmt.Sprintf("table=%s pk=%s=%s", table, pkCol, pkVal))
@@ -1211,7 +1217,8 @@ func InsertTableRow(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if err := src.InsertItem(table, row); err != nil {
-		auth.JSONErr(w, 500, err.Error())
+		log.Printf("InsertTableRow: %v", err)
+		auth.JSONErr(w, 500, "新增数据失败")
 		return
 	}
 	auditLog(r, "新增数据", id, fmt.Sprintf("table=%s", table))
@@ -1385,7 +1392,8 @@ func CloneProject(w http.ResponseWriter, r *http.Request, id string) {
 	_, err = db.DB.Exec("INSERT INTO projects (id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, tags, offline_msg, features, tabs, datasources) VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb)",
 		orig.ID, orig.Name, orig.Repo, orig.Desc, orig.IconURL, orig.Stack, orig.DB, orig.DSN, 0, orig.Status, orig.Order, orig.Pinned, orig.IconCls, string(tagsJSON), orig.OfflineMsg, string(featJSON), string(tabsJSON), string(dsJSON))
 	if err != nil {
-		auth.JSONErr(w, 400, "创建副本失败: "+err.Error())
+		log.Printf("DuplicateProject insert: %v", err)
+		auth.JSONErr(w, 400, "创建副本失败")
 		return
 	}
 	auth.JSONCreated(w, orig)

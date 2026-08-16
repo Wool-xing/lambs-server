@@ -4,6 +4,7 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
@@ -84,7 +85,9 @@ func HandleForgotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	body := fmt.Sprintf("您的 Lambs 管理系统密码重置验证码是：%s\n\n验证码 5 分钟内有效。如非本人操作请忽略此邮件。", code)
 	if err := notify.SendMailForget(req.Email, "Lambs 密码重置验证码", body); err != nil {
-		JSONErr(w, 503, err.Error())
+		// Unauthenticated endpoint — never echo SMTP internals to the caller.
+		log.Printf("forgot sendmail: %v", err)
+		JSONErr(w, 503, "邮件发送失败，请稍后再试")
 		return
 	}
 	JSONOK(w, map[string]string{"message": "验证码已发送，请查收邮箱"})
@@ -136,7 +139,9 @@ func HandleForgotVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// Bump token_version — every existing token for this account dies now.
 	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE username=$2", string(hash), req.Username); err != nil {
-		JSONErr(w, 500, err.Error())
+		// Unauthenticated endpoint — DB details stay in the server log.
+		log.Printf("forgot verify update: %v", err)
+		JSONErr(w, 500, "密码重置失败，请稍后再试")
 		return
 	}
 	db.DB.Exec("UPDATE verification_codes SET used=TRUE WHERE id=$1", id)

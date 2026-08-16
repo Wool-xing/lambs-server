@@ -91,7 +91,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	err := db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, avatar_url, avatar_thumb) VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,'active',$6::jsonb,$7,$8) RETURNING id::text",
 		u.Username, u.Name, u.Email, string(hash), u.Role, pa, av, avThumb).Scan(&u.ID)
-	if err != nil { auth.JSONErr(w, 400, "创建失败: "+err.Error()); return }
+	if err != nil { log.Printf("CreateUser insert: %v", err); auth.JSONErr(w, 400, "创建失败"); return }
 	auditLog(r, "创建用户", u.Username, "role="+u.Role)
 	// Auto-generated password must reach the admin (frontend toasts res.data.password) —
 	// otherwise a user created without one can never log in.
