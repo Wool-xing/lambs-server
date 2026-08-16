@@ -474,6 +474,7 @@ func main() {
 	// already limits /lambs/api/auth/login) for direct :3602 access.
 	credLimit := auth.RateLimit(5, time.Minute)
 	mux.HandleFunc("POST /api/auth/login", auth.CORS(credLimit(auth.HandleLogin)))
+	mux.HandleFunc("GET /api/auth/salt", auth.CORS(auth.HandleSalt))
 	mux.HandleFunc("GET /api/health", auth.CORS(handleHealth))
 	mux.HandleFunc("GET /api/gate/check-internal", auth.CORS(gate.HandleCheckInternal))
 	mux.HandleFunc("GET /api/gate/offline-page", auth.CORS(gate.HandleOfflinePage))
