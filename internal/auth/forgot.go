@@ -31,6 +31,9 @@ func EnsureForgotSchema() {
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT ''`)
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`)
 	db.DB.Exec(`ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`)
+	// Legacy table stores the 6-digit code in varchar(10) — R8 stores
+	// sha256(code), which needs the full width. Idempotent widen.
+	db.DB.Exec(`ALTER TABLE verification_codes ALTER COLUMN code TYPE TEXT`)
 	db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0`)
 	db.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pwd_salt TEXT NOT NULL DEFAULT ''`)
 }
