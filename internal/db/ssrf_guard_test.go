@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 func TestCheckDSNHost(t *testing.T) {
 	cases := []struct {
@@ -32,6 +35,61 @@ func TestCheckDSNHost(t *testing.T) {
 				t.Errorf("dsn=%q err=%v wantErr=%v", c.dsn, err, c.wantErr)
 			}
 		})
+	}
+}
+
+// TestPinHostToIP: URL-form DSNs (http/qdrant/redis) get their hostname pinned
+// to a validated IP so the later dial cannot re-resolve (R3-3 DNS rebinding).
+// postgres/mysql/mongo/https are driver/TLS-bound — pinning is skipped there.
+func TestPinHostToIP(t *testing.T) {
+	cases := []struct {
+		name string
+		dsn  string
+		want string
+	}{
+		{"http localhost pinned", "http://localhost:8000/api", "http://127.0.0.1:8000/api"},
+		{"qdrant localhost pinned", "qdrant://localhost:6333", "qdrant://127.0.0.1:6333"},
+		{"already IP unchanged", "http://127.0.0.1:8901", "http://127.0.0.1:8901"},
+		{"redis IP unchanged", "redis://:pw@127.0.0.1:6379/0", "redis://:pw@127.0.0.1:6379/0"},
+		{"postgres untouched", "postgres://u:p@db.example.com:5432/db", "postgres://u:p@db.example.com:5432/db"},
+		{"https untouched", "https://example.com/api", "https://example.com/api"},
+		{"sqlite untouched", "sqlite:///data/app.db", "sqlite:///data/app.db"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := pinHostToIP(c.dsn)
+			if err != nil {
+				t.Fatalf("dsn=%q err=%v", c.dsn, err)
+			}
+			if got != c.want {
+				t.Errorf("dsn=%q got=%q want=%q", c.dsn, got, c.want)
+			}
+		})
+	}
+}
+
+// TestPickIPv4: IPv6-only resolution must NOT be pinned (bare IPv6 breaks URLs).
+func TestPickIPv4(t *testing.T) {
+	if got := pickIPv4([]net.IP{net.ParseIP("2001:db8::1")}); got != nil {
+		t.Errorf("ipv6-only got %v want nil", got)
+	}
+	if got := pickIPv4([]net.IP{net.ParseIP("2001:db8::1"), net.ParseIP("192.0.2.1")}); got == nil || got.String() != "192.0.2.1" {
+		t.Errorf("mixed got %v want 192.0.2.1", got)
+	}
+}
+
+// TestNewDataSourcePinsHost: the pin must happen inside NewDataSource.
+func TestNewDataSourcePinsHost(t *testing.T) {
+	src, err := NewDataSource("http://localhost:8000")
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	rest, ok := src.(*RESTSource)
+	if !ok {
+		t.Fatalf("unexpected type %T", src)
+	}
+	if rest.dsn != "http://127.0.0.1:8000" {
+		t.Errorf("dsn=%q want pinned 127.0.0.1", rest.dsn)
 	}
 }
 

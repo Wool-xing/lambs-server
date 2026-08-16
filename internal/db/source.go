@@ -44,6 +44,12 @@ func NewDataSource(dsn string) (DataSource, error) {
 	if err := CheckDSNHost(dsn); err != nil {
 		return nil, err
 	}
+	// Pin validated URL-form hosts to IPs so the dial cannot re-resolve (R3-3).
+	if pinned, err := pinHostToIP(dsn); err != nil {
+		return nil, err
+	} else {
+		dsn = pinned
+	}
 	switch scheme {
 	case "postgres", "postgresql":
 		return &PostgresSource{dsn: dsn}, nil
