@@ -84,7 +84,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 		// contract (R7). The plaintext is returned to the admin below.
 		salt = auth.NewSaltHex()
 	}
-	if salt != "" && (len(salt) != 32 || !auth.IsSHA256Hex(salt)) {
+	if salt != "" && (len(salt) != 32 || !auth.IsSaltHex(salt)) {
 		auth.JSONErr(w, 400, "盐格式不正确")
 		return
 	}

@@ -50,11 +50,9 @@ func NewSaltHex() string {
 	return hex.EncodeToString(b)
 }
 
-// isSHA256Hex reports whether s is a lowercase 64-char hex digest — the shape
-// the client sends after hashing (password + salt). Anything else is treated
-// as a legacy plaintext password.
-func IsSHA256Hex(s string) bool {
-	if len(s) != 64 {
+// isHexStr reports whether s is lowercase hex of exactly n chars.
+func isHexStr(s string, n int) bool {
+	if len(s) != n {
 		return false
 	}
 	for _, c := range s {
@@ -64,6 +62,14 @@ func IsSHA256Hex(s string) bool {
 	}
 	return true
 }
+
+// IsSHA256Hex reports whether s is a lowercase 64-char hex digest — the shape
+// the client sends after hashing (password + salt). Anything else is treated
+// as a legacy plaintext password.
+func IsSHA256Hex(s string) bool { return isHexStr(s, 64) }
+
+// IsSaltHex reports whether s is a 32-char hex salt (16 random bytes).
+func IsSaltHex(s string) bool { return isHexStr(s, 32) }
 
 // verifyPassword checks a login payload against the stored bcrypt hash.
 // New contract (R7): client sends sha256(password+salt), the DB stores
@@ -312,7 +318,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	if len(req.Salt) > 0 {
 		salt = req.Salt
 	}
-	if salt != "" && (len(salt) != 32 || !IsSHA256Hex(salt)) {
+	if salt != "" && (len(salt) != 32 || !IsSaltHex(salt)) {
 		JSONErr(w, 400, "盐格式不正确")
 		return
 	}
