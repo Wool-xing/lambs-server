@@ -79,8 +79,10 @@ func HandleForgotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	// Invalidate older unused codes for this user
 	db.DB.Exec("UPDATE verification_codes SET used=TRUE WHERE username=$1 AND used=FALSE", req.Username)
+	// Store sha256(code), never the plaintext code — a leaked DB must not
+	// hand out resettable codes for every account (R8).
 	if _, err := db.DB.Exec("INSERT INTO verification_codes (username, email, code, used, expires_at) VALUES ($1,$2,$3,FALSE, NOW() + INTERVAL '5 minutes')",
-		req.Username, req.Email, code); err != nil {
+		req.Username, req.Email, sha256Hex(code)); err != nil {
 		JSONErr(w, 500, "验证码生成失败")
 		return
 	}
@@ -128,7 +130,15 @@ func HandleForgotVerify(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 400, "尝试次数过多，请重新获取验证码")
 		return
 	}
-	if dbCode != req.Code {
+	// Per-account failure gate: cap total verify failures in a 10-minute
+	// window so code re-issuing cannot be abused to hammer the endpoint (R8).
+	var recentFails int
+	db.DB.QueryRow("SELECT COUNT(*) FROM verification_codes WHERE username=$1 AND created_at > NOW() - INTERVAL '10 minutes' AND attempts > 0", req.Username).Scan(&recentFails)
+	if recentFails >= 20 {
+		JSONErr(w, 429, "尝试次数过多，请稍后再试")
+		return
+	}
+	if dbCode != sha256Hex(req.Code) {
 		db.DB.Exec("UPDATE verification_codes SET attempts=attempts+1 WHERE id=$1", id)
 		JSONErr(w, 400, fmt.Sprintf("验证码错误，剩余 %d 次尝试", maxAttempts-attempts-1))
 		return
