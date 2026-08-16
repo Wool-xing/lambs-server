@@ -217,5 +217,40 @@ func str(v interface{}) string {
 }
 
 func (s *RedisSource) CountItems(collection string) (int, error) {
-	return 0, fmt.Errorf("redis source has no row count")
+	if err := validateKey(collection); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := s.client()
+	if err != nil {
+		return 0, err
+	}
+	defer c.Close()
+	key := collection
+	// go-redis Type returns "none" (not an error, not "") for missing keys —
+	// the error must propagate, and "none" is the empty-collection case.
+	t, terr := c.Type(ctx, key).Result()
+	if terr != nil {
+		return 0, terr
+	}
+	switch t {
+	case "none":
+		return 0, nil // key does not exist
+	case "string":
+		return 1, nil
+	case "hash":
+		n, err := c.HLen(ctx, key).Result()
+		return int(n), err
+	case "list":
+		n, err := c.LLen(ctx, key).Result()
+		return int(n), err
+	case "set":
+		n, err := c.SCard(ctx, key).Result()
+		return int(n), err
+	case "zset":
+		n, err := c.ZCard(ctx, key).Result()
+		return int(n), err
+	}
+	return 0, fmt.Errorf("unknown redis key type")
 }

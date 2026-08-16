@@ -75,16 +75,16 @@ func (s *RESTSource) ListCollections() ([]string, error) {
 	return []string{}, nil
 }
 
-func (s *RESTSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
-	if err := validateTable(collection); err != nil {
-		return nil, nil, "", err
-	}
+// fetchRows GETs the collection and parses rows (shared by ReadItems and
+// CountItems — REST has no dedicated count endpoint, so counting means
+// fetching).
+func (s *RESTSource) fetchRows(collection string) ([]map[string]interface{}, error) {
 	data, status, err := s.do("GET", s.base()+"/"+collection, nil)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, err
 	}
 	if status >= 500 {
-		return nil, nil, "", fmt.Errorf("rest api error: status %d", status)
+		return nil, fmt.Errorf("rest api error: status %d", status)
 	}
 	var rows []map[string]interface{}
 	if err := json.Unmarshal(data, &rows); err != nil {
@@ -92,9 +92,20 @@ func (s *RESTSource) ReadItems(collection string, limit, offset int) ([]map[stri
 			Rows []map[string]interface{} `json:"rows"`
 		}
 		if err2 := json.Unmarshal(data, &wrapper); err2 != nil {
-			return nil, nil, "", fmt.Errorf("invalid rest response: %w", err)
+			return nil, fmt.Errorf("invalid rest response: %w", err)
 		}
 		rows = wrapper.Rows
+	}
+	return rows, nil
+}
+
+func (s *RESTSource) ReadItems(collection string, limit, offset int) ([]map[string]interface{}, []string, string, error) {
+	if err := validateTable(collection); err != nil {
+		return nil, nil, "", err
+	}
+	rows, err := s.fetchRows(collection)
+	if err != nil {
+		return nil, nil, "", err
 	}
 	colSet := map[string]bool{}
 	for _, r := range rows {
@@ -180,5 +191,9 @@ func (s *RESTSource) DeleteItem(collection, pkCol, pkVal string) error {
 }
 
 func (s *RESTSource) CountItems(collection string) (int, error) {
-	return 0, fmt.Errorf("rest source has no count endpoint")
+	rows, err := s.fetchRows(collection)
+	if err != nil {
+		return 0, err
+	}
+	return len(rows), nil
 }
