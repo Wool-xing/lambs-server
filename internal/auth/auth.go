@@ -67,18 +67,16 @@ func IsSHA256Hex(s string) bool {
 
 // verifyPassword checks a login payload against the stored bcrypt hash.
 // New contract (R7): client sends sha256(password+salt), the DB stores
-// bcrypt(that payload). Legacy rows (salt='') store bcrypt(sha256(plain)),
-// and the legacy frontend sends plaintext — both match via the sha256Hex
-// wrap on the incoming value.
-// Returns ok=true on match; legacy=true when the legacy path matched and the
-// account should be upgraded to a salt.
-func verifyPassword(storedHash, payload string) (ok, legacy bool) {
+// bcrypt(that payload). Legacy: rows store bcrypt(sha256(plain)) and the old
+// frontend sends plaintext — sha256(payload+salt) reproduces the stored input
+// for both pre-salt rows (salt='') AND upgraded rows (salt set), so the old
+// frontend keeps working after an account is upgraded.
+// Returns ok=true on match; legacy=true when the wrapped path matched.
+func verifyPassword(storedHash, payload, salt string) (ok, legacy bool) {
 	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(payload)) == nil {
 		return true, false
 	}
-	// Legacy fallback: plaintext from the old frontend, or pre-salt rows
-	// verified against bcrypt(sha256(plain)).
-	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(sha256Hex(payload))) == nil {
+	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(sha256Hex(payload+salt))) == nil {
 		return true, true
 	}
 	return false, false
@@ -218,7 +216,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 403, "账号已停用")
 		return
 	}
-	ok, legacy := verifyPassword(user.PasswordHash, req.Password)
+	ok, legacy := verifyPassword(user.PasswordHash, req.Password, salt)
 	if !ok {
 		JSONErr(w, 401, "用户名或密码错误")
 		return
@@ -373,12 +371,12 @@ func HandleMePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := r.Header.Get("X-User-ID")
-	var hash string
-	if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=$1", userID).Scan(&hash); err != nil {
+	var hash, salt string
+	if err := db.DB.QueryRow("SELECT password_hash, COALESCE(pwd_salt,'') FROM users WHERE id=$1", userID).Scan(&hash, &salt); err != nil {
 		JSONErr(w, 404, "用户不存在")
 		return
 	}
-	if ok, _ := verifyPassword(hash, req.Old); !ok {
+	if ok, _ := verifyPassword(hash, req.Old, salt); !ok {
 		JSONErr(w, 400, "原密码错误")
 		return
 	}
