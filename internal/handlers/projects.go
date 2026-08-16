@@ -699,13 +699,17 @@ func ProjectTables(w http.ResponseWriter, r *http.Request, id string) {
 	search := r.URL.Query().Get("search")
 	sortCol := r.URL.Query().Get("sort_col")
 	var total int
-	// With search/sort active, fetch the capped window (limit==0 → 500),
-	// filter+sort in memory, then paginate — so the result is consistent
-	// across every data source type.
+	// With search/sort active, sweep the full table in capped chunks, then
+	// filter+sort in memory — consistent across every data source type and
+	// no silent row loss beyond the 500-row window (R3-6).
+	var data []map[string]interface{}
+	var cols []string
+	var pk string
 	if search != "" || sortCol != "" {
-		limit, offset = 0, 0
+		data, cols, pk, err = readAllItems(src, table)
+	} else {
+		data, cols, pk, err = src.ReadItems(table, limit, offset)
 	}
-	data, cols, pk, err := src.ReadItems(table, limit, offset)
 	if err != nil { auth.JSONErr(w, 500, err.Error()); return }
 	// Single-point redaction: never expose password/token values through the
 	// data browser, regardless of data source (REST/Mongo/Redis rows were
