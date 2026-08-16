@@ -39,15 +39,28 @@ func CheckDSNHost(dsn string) error {
 			host = h
 		}
 	}
-	if host == "" && !strings.Contains(dsn, "://") {
-		// lib/pq keyword form (no scheme): "host=10.0.0.5 port=5432 ...".
-		// Values may be quoted. dsn is already lowercased above.
+	if host == "" {
+		// lib/pq keyword form: "host=10.0.0.5 port=5432 ...". Values may be
+		// quoted. dsn is already lowercased above. No "://" gate here: a
+		// password containing "://" must not skip host extraction (the old
+		// gate relied on SplitHostPort accidentally treating the whole string
+		// as host — explicit extraction is the stable fail-closed path).
 		for _, f := range strings.Fields(dsn) {
 			kv := strings.SplitN(f, "=", 2)
 			if len(kv) == 2 && kv[0] == "host" {
 				host = strings.Trim(kv[1], `'"`)
 				break
 			}
+		}
+		// lib/pq accepts a comma-separated host list as a failover chain —
+		// every entry must pass the guard, not just the first (R5 C5).
+		if host != "" && strings.Contains(host, ",") {
+			for _, h := range strings.Split(host, ",") {
+				if err := checkHostPublic(strings.TrimSpace(h)); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 	}
 	if host == "" {

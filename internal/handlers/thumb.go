@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"lambs-server-go/internal/db"
@@ -29,6 +30,10 @@ func makeThumb(dataURL string, maxSide int) (string, error) {
 	comma := strings.Index(dataURL, ",")
 	if comma < 0 {
 		return dataURL, nil
+	}
+	// Same 8MB decode-bomb guard as DataURLBytes (R5 perf review).
+	if len(dataURL) > 8<<20 {
+		return "", fmt.Errorf("image too large")
 	}
 	raw, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
 	if err != nil {
@@ -141,19 +146,38 @@ func DataURLBytes(data string) ([]byte, string, bool) {
 	if !strings.HasPrefix(data, "data:") {
 		return nil, "", false
 	}
-	semi := strings.Index(data, ";")
-	comma := strings.Index(data, ",")
-	if semi < 0 || comma < 0 || comma < semi {
+	// Decode-bomb guard: an 8MB data URL expands to ~6MB raw at most —
+	// anything bigger is not an icon/logo (R5 perf review).
+	if len(data) > 8<<20 {
 		return nil, "", false
 	}
-	ct := data[5:semi]
+	semi := strings.Index(data, ";")
+	comma := strings.Index(data, ",")
+	if comma < 0 || comma < 5 || (semi >= 0 && comma < semi) {
+		return nil, "", false
+	}
+	// No ";" means no parameters: data:image/svg+xml,<raw> — the media type
+	// runs straight to the comma.
+	ct := data[5:comma]
+	if semi >= 0 {
+		ct = data[5:semi]
+	}
 	switch ct {
 	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/svg+xml":
 	default:
 		return nil, "", false
 	}
-	if !strings.HasPrefix(data[semi+1:], "base64") {
-		return nil, "", false
+	// "base64" may sit after other params (charset=utf-8;base64) — check the
+	// whole parameter section, not just the first segment (R5 C1).
+	if !strings.Contains(data[semi+1:comma], "base64") {
+		// Non-base64 data URL (e.g. data:image/svg+xml,<svg ...>) — the
+		// payload is raw (percent-encoded) text after the comma. SVGs saved
+		// without base64 previously 404'd (R3-P2).
+		raw, err := url.QueryUnescape(data[comma+1:])
+		if err != nil {
+			return nil, "", false
+		}
+		return []byte(raw), ct, true
 	}
 	raw, err := base64.StdEncoding.DecodeString(data[comma+1:])
 	if err != nil {
@@ -245,6 +269,7 @@ func EnsureThumbsBackfill() {
 
 	urows, err := db.DB.Query("SELECT id, COALESCE(avatar_url::text,''), COALESCE(avatar_thumb,'') FROM users WHERE avatar_url IS NOT NULL AND avatar_url::text LIKE 'data:%' AND (avatar_thumb IS NULL OR avatar_thumb = '')")
 	if err != nil {
+		log.Printf("EnsureThumbs: users query failed: %v", err)
 		return
 	}
 	defer urows.Close()
@@ -253,12 +278,21 @@ func EnsureThumbsBackfill() {
 	for urows.Next() {
 		var u upair
 		var thumb string
-		urows.Scan(&u.id, &u.av, &thumb)
+		if err := urows.Scan(&u.id, &u.av, &thumb); err != nil {
+			log.Printf("EnsureThumbs: users scan failed: %v", err)
+			continue
+		}
 		ujobs = append(ujobs, u)
+	}
+	if err := urows.Err(); err != nil {
+		log.Printf("EnsureThumbs: users rows error: %v", err)
 	}
 	for _, u := range ujobs {
 		if t, err := makeThumb(u.av, 128); err == nil && t != u.av {
-			db.DB.Exec("UPDATE users SET avatar_thumb=$1 WHERE id=$2 AND (avatar_thumb IS NULL OR avatar_thumb = '')", t, u.id)
+			// Guarded UPDATE, same as the projects branch (R5 C2).
+			if _, err := db.DB.Exec("UPDATE users SET avatar_thumb=$1 WHERE id=$2 AND (avatar_thumb IS NULL OR avatar_thumb = '')", t, u.id); err != nil {
+				log.Printf("EnsureThumbs: users update %s failed: %v", u.id, err)
+			}
 		}
 	}
 }
