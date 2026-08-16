@@ -58,33 +58,36 @@ func UpdateConfig(w http.ResponseWriter, r *http.Request, cfg *models.Config) {
 }
 
 func ExportProjects(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=projects.csv")
-	w.Write([]byte{0xEF, 0xBB, 0xBF})
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"ID", "Name", "Status", "Database", "Users"})
+	// Query first: a DB error must produce a clean JSON error, not a CSV
+	// body with BOM/header already written followed by JSON (R3-P2).
 	rows, err := db.DB.Query("SELECT id, name, status, db_type, users_count FROM projects")
 	if err != nil {
 		auth.JSONErr(w, 500, "导出失败")
 		return
 	}
 	defer rows.Close()
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=projects.csv")
+	w.Write([]byte{0xEF, 0xBB, 0xBF})
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"ID", "Name", "Status", "Database", "Users"})
 	for rows.Next() { var id, name, status, dbType string; var users int; rows.Scan(&id, &name, &status, &dbType, &users); cw.Write([]string{id, name, status, dbType, strconv.Itoa(users)}) }
 	cw.Flush()
 }
 
 func ExportUsers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=users.csv")
-	w.Write([]byte{0xEF, 0xBB, 0xBF})
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"ID", "Username", "Name", "Email", "Role", "Status"})
+	// Query first (same BOM/JSON mixing fix as ExportProjects, R3-P2).
 	rows, err := db.DB.Query("SELECT id, username, name, email, role, status FROM users")
 	if err != nil {
 		auth.JSONErr(w, 500, "导出失败")
 		return
 	}
 	defer rows.Close()
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=users.csv")
+	w.Write([]byte{0xEF, 0xBB, 0xBF})
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"ID", "Username", "Name", "Email", "Role", "Status"})
 	for rows.Next() { var u models.User; rows.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Role, &u.Status); cw.Write([]string{u.ID, u.Username, u.Name, u.Email, u.Role, u.Status}) }
 	cw.Flush()
 }
