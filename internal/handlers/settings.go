@@ -27,7 +27,10 @@ func GetConfig(w http.ResponseWriter, r *http.Request, cfg *models.Config) {
 
 func UpdateConfig(w http.ResponseWriter, r *http.Request, cfg *models.Config) {
 	var incoming models.Config
-	json.NewDecoder(r.Body).Decode(&incoming)
+	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+		auth.JSONErr(w, 400, "无效数据")
+		return
+	}
 	// Never accept secrets from API — these come from env/config file
 	if incoming.JWTSecret != "" { incoming.JWTSecret = "" }
 	if incoming.SMTPPassword != "" { incoming.SMTPPassword = "" }
@@ -52,8 +55,14 @@ func UpdateConfig(w http.ResponseWriter, r *http.Request, cfg *models.Config) {
 	}
 	cfg.JWTSecret = old.JWTSecret
 	cfg.SMTPPassword = old.SMTPPassword
-	if data, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-		os.WriteFile(cfgPath, data, 0600)
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err == nil {
+		err = os.WriteFile(cfgPath, data, 0600)
+	}
+	if err != nil {
+		log.Printf("UpdateConfig persist: %v", err)
+		auth.JSONErr(w, 500, "配置保存失败")
+		return
 	}
 	auth.JSONOK(w, map[string]string{"saved": "ok"})
 }

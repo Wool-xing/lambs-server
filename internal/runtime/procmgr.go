@@ -482,14 +482,19 @@ func (pm *ProcManager) startShared(st *svcState) error {
 }
 
 // stopShared runs the stop command and kills the direct process if tracked.
+// Reads the process under pm.mu — the Wait goroutine nils st.cmd under the
+// same lock, and a lock-free read raced to a nil deref (R12 code review).
 func (pm *ProcManager) stopShared(st *svcState) {
 	if st.stopCmd != "" {
 		c := exec.Command("bash", "-c", st.stopCmd)
 		c.CombinedOutput()
 	}
-	if st.cmd != nil && st.cmd.Process != nil {
-		pid := st.cmd.Process.Pid
-		done := st.done
+	pm.mu.Lock()
+	cmd := st.cmd
+	done := st.done
+	pm.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		pid := cmd.Process.Pid
 		killGroup(pid, syscall.SIGTERM)
 		select {
 		case <-done:
