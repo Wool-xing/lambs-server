@@ -348,6 +348,17 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	if p.Features == nil {
 		p.Features = []interface{}{}
 	}
+	// Per-type live stat cards: computed from the datasource itself, so new
+	// projects get the right cards automatically. Any failure (offline
+	// source, unsupported type) keeps the stored features — page must not
+	// break, and cards carry no secrets so all roles see them.
+	if p.DSN != "" && p.DSN != "—" {
+		if stats, err := db.CollectStats(p.DB, p.DSN); err == nil {
+			if cards := db.BuildStatCards(p.DB, stats); cards != nil {
+				p.Features = cards
+			}
+		}
+	}
 	if tabsRaw.Valid {
 		json.Unmarshal([]byte(tabsRaw.String), &p.Tabs)
 	}
@@ -506,8 +517,24 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	// Non-super_admin must never modify dsn — force keep-current.
 	// (Value-based masking check is fragile: payload encoding varies.)
+	// Same for every process-control field: startup_command/service_name feed
+	// procmgr's exec, port feeds nginx proxy_pass — a project_admin writing
+	// them is low-privilege RCE/config injection (R12 security).
 	if r.Header.Get("X-Role") != "super_admin" {
 		p.DSN = ""
+		p.StartupCommand = ""
+		p.ServiceName = ""
+		p.BackendURL = ""
+		p.HealthURL = ""
+		p.Port = ""
+	}
+	// Port feeds nginx proxy_pass directly — must be a plain 1-65535 number
+	// for everyone, super_admin included (R12 security: config injection).
+	if p.Port != "" {
+		if n, err := strconv.Atoi(p.Port); err != nil || n < 1 || n > 65535 {
+			auth.JSONErr(w, 400, "端口必须是 1-65535 的数字")
+			return
+		}
 	}
 	// Detect which optional fields were present in the request
 	var raw map[string]json.RawMessage
@@ -520,8 +547,11 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	var cur models.Project
 	var curDS, curSvc sql.NullString
-	db.DB.QueryRow("SELECT name, description, icon_url, stack, port, db_type, dsn, backend_url, service_name, base_path, COALESCE(tags::text,'[]'), offline_msg, COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]') FROM projects WHERE id=$1", id).
-		Scan(&cur.Name, &cur.Desc, &cur.IconURL, &cur.Stack, &cur.Port, &cur.DB, &cur.DSN, &cur.BackendURL, &cur.ServiceName, &cur.BasePath, &cur.Tags, &cur.OfflineMsg, &cur.StartupCommand, &cur.HealthURL, &cur.BackupIntervalHours, &cur.BackupRetentionDays, &curDS, &curSvc)
+	if err := db.DB.QueryRow("SELECT name, description, icon_url, stack, port, db_type, dsn, backend_url, service_name, base_path, COALESCE(tags::text,'[]'), offline_msg, COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]') FROM projects WHERE id=$1", id).
+		Scan(&cur.Name, &cur.Desc, &cur.IconURL, &cur.Stack, &cur.Port, &cur.DB, &cur.DSN, &cur.BackendURL, &cur.ServiceName, &cur.BasePath, &cur.Tags, &cur.OfflineMsg, &cur.StartupCommand, &cur.HealthURL, &cur.BackupIntervalHours, &cur.BackupRetentionDays, &curDS, &curSvc); err != nil {
+		auth.JSONErr(w, 404, "项目不存在")
+		return
+	}
 	if !hasInterval {
 		p.BackupIntervalHours = cur.BackupIntervalHours
 	}
@@ -667,7 +697,10 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	var current string
-	db.DB.QueryRow("SELECT status FROM projects WHERE id=$1", id).Scan(&current)
+	if err := db.DB.QueryRow("SELECT status FROM projects WHERE id=$1", id).Scan(&current); err != nil {
+		auth.JSONErr(w, 404, "项目不存在")
+		return
+	}
 	next := "offline"
 	if current == "offline" {
 		next = "maintenance"
@@ -684,7 +717,11 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 		auth.JSONErr(w, 400, "状态只能是 online/offline/maintenance")
 		return
 	}
-	db.DB.Exec("UPDATE projects SET status=$1, updated_at=NOW() WHERE id=$2", next, id)
+	if _, err := db.DB.Exec("UPDATE projects SET status=$1, updated_at=NOW() WHERE id=$2", next, id); err != nil {
+		log.Printf("PatchProjectStatus update: %v", err)
+		auth.JSONErr(w, 500, "状态更新失败")
+		return
+	}
 	var pname string
 	db.DB.QueryRow("SELECT name FROM projects WHERE id=$1", id).Scan(&pname)
 
