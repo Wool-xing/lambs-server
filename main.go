@@ -563,6 +563,7 @@ func main() {
 	// System
 	mux.HandleFunc("GET /api/system/health", a(handleSystemHealth))
 	mux.HandleFunc("GET /api/logs/aggregated", a(handleAggregatedLogs))
+	mux.HandleFunc("GET /api/logs/system", a(handlers.HandleSystemLogs))
 
 	// Runtime API
 	mux.HandleFunc("POST /api/runtime/detect", sa(handleDetectStartup))
