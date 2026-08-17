@@ -391,6 +391,9 @@ func (pm *ProcManager) AttachServices(projectID string) {
 				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
 					fmt.Sprintf("n%d", time.Now().UnixNano()), projectID, "alert", "共享服务启动失败", fmt.Sprintf("「%s」启动失败: %v", name, err))
 			}
+			// Stagger concurrent service starts — several heavy services
+			// launching at once spikes CPU/memory on one box (R13 perf).
+			time.Sleep(2 * time.Second)
 		}
 	}
 }

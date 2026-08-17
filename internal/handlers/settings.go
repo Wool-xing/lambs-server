@@ -153,7 +153,19 @@ func ExportProjectUsers(w http.ResponseWriter, r *http.Request, id string) {
 	if len(users) > 0 {
 		var cols []string; for k := range users[0] { cols = append(cols, k) }
 		cw.Write(cols)
-		for _, row := range users { vals := make([]string, len(cols)); for i, c := range cols { vals[i] = fmt.Sprintf("%v", row[c]) }; cw.Write(vals) }
+		for _, row := range users {
+			vals := make([]string, len(cols))
+			for i, c := range cols {
+				v := fmt.Sprintf("%v", row[c])
+				// Formula-injection guard: cells starting with = + - @ are
+				// executed by Excel on open (R12 security).
+				if strings.HasPrefix(v, "=") || strings.HasPrefix(v, "+") || strings.HasPrefix(v, "-") || strings.HasPrefix(v, "@") {
+					v = "'" + v
+				}
+				vals[i] = v
+			}
+			cw.Write(vals)
+		}
 	}
 	cw.Flush()
 }

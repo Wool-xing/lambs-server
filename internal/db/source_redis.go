@@ -1,6 +1,7 @@
 package db
 
 import (
+	"sync"
 	"context"
 	"fmt"
 	"net/url"
@@ -16,6 +17,8 @@ import (
 // Collections = keys. ReadItems expands a key by its type into rows.
 type RedisSource struct {
 	dsn string
+	once sync.Once
+	c    *redis.Client // created once — go-redis pools connections internally (R13 perf)
 }
 
 // validateKey allows the characters legal in Redis keys (SQL table-name
@@ -33,22 +36,30 @@ func validateKey(k string) error {
 }
 
 func (s *RedisSource) client() (*redis.Client, error) {
-	u, err := url.Parse(s.dsn)
-	if err != nil {
-		return nil, fmt.Errorf("invalid redis dsn: %w", err)
-	}
-	db := 0
-	if p := strings.TrimPrefix(u.Path, "/"); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
-			db = n
+	var initErr error
+	s.once.Do(func() {
+		u, err := url.Parse(s.dsn)
+		if err != nil {
+			initErr = fmt.Errorf("invalid redis dsn: %w", err)
+			return
 		}
+		db := 0
+		if p := strings.TrimPrefix(u.Path, "/"); p != "" {
+			if n, err := strconv.Atoi(p); err == nil {
+				db = n
+			}
+		}
+		opts := &redis.Options{Addr: u.Host, DB: db, DialTimeout: 5 * time.Second}
+		if u.User != nil {
+			opts.Username = u.User.Username()
+			opts.Password, _ = u.User.Password()
+		}
+		s.c = redis.NewClient(opts)
+	})
+	if initErr != nil {
+		return nil, initErr
 	}
-	opts := &redis.Options{Addr: u.Host, DB: db, DialTimeout: 5 * time.Second}
-	if u.User != nil {
-		opts.Username = u.User.Username()
-		opts.Password, _ = u.User.Password()
-	}
-	return redis.NewClient(opts), nil
+	return s.c, nil
 }
 
 func (s *RedisSource) ListCollections() ([]string, error) {
@@ -188,8 +199,31 @@ func (s *RedisSource) InsertItem(collection string, data map[string]interface{})
 }
 
 func (s *RedisSource) UpdateItem(collection, pkCol, pkVal string, data map[string]interface{}) error {
-	// Redis values are keyed by field/member/index — reuse insert path for the new value.
-	return s.InsertItem(collection, data)
+	// "Update" = replace the element identified by pkVal. The old reuse of
+	// InsertItem turned list updates into appends (R13).
+	if err := validateKey(collection); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := s.client()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	switch str(data["type"]) {
+	case "list":
+		idx, err := strconv.ParseInt(pkVal, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid list index: %s", pkVal)
+		}
+		return c.LSet(ctx, collection, idx, str(data["value"])).Err()
+	case "hash":
+		return c.HSet(ctx, collection, pkVal, str(data["value"])).Err()
+	default:
+		// string/set have no sub-element semantics — insert path is correct.
+		return s.InsertItem(collection, data)
+	}
 }
 
 func (s *RedisSource) DeleteItem(collection, pkCol, pkVal string) error {

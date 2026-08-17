@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"lambs-server-go/internal/db"
@@ -75,40 +76,61 @@ func pushConfig(conf string) error {
 }
 
 // AutoRefresh periodically syncs user counts from project datasources.
+// Counts run concurrently (semaphore-capped) — the old serial loop let one
+// unreachable DB stall the whole round for its dial timeout (R13 perf).
 func AutoRefresh() {
+	sem := make(chan struct{}, 8)
 	for {
 		time.Sleep(1 * time.Minute)
 		rows, err := db.DB.Query("SELECT id, dsn FROM projects WHERE dsn IS NOT NULL AND dsn != '' AND dsn != '—'")
 		if err != nil {
 			continue
 		}
+		type job struct{ id, dsn string }
+		var jobs []job
 		for rows.Next() {
 			var id, dsn string
 			rows.Scan(&id, &dsn)
-			n := db.SyncUserCount(dsn)
-			db.DB.Exec("UPDATE projects SET users_count=$1, updated_at=NOW() WHERE id=$2", n, id)
-			var fRaw sql.NullString
-			db.DB.QueryRow("SELECT features::text FROM projects WHERE id=$1", id).Scan(&fRaw)
-			if fRaw.Valid && fRaw.String != "" {
-				var feats []map[string]interface{}
-				if json.Unmarshal([]byte(fRaw.String), &feats) == nil {
-					found := false
-					for i, f := range feats {
-						if l, ok := f["label"]; ok && l == "用户数" {
-							feats[i]["value"] = n
-							found = true
-							break
-						}
-					}
-					if !found {
-						feats = append(feats, map[string]interface{}{"label": "用户数", "value": n})
-					}
-					b, _ := json.Marshal(feats)
-					db.DB.Exec("UPDATE projects SET features=$1 WHERE id=$2", string(b), id)
-				}
-			}
+			jobs = append(jobs, job{id, dsn})
 		}
 		rows.Close()
+		var wg sync.WaitGroup
+		for _, j := range jobs {
+			wg.Add(1)
+			go func(j job) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				refreshOne(j.id, j.dsn)
+			}(j)
+		}
+		wg.Wait()
+	}
+}
+
+// refreshOne updates one project's user count and 用户数 feature.
+func refreshOne(id, dsn string) {
+	n := db.SyncUserCount(dsn)
+	db.DB.Exec("UPDATE projects SET users_count=$1, updated_at=NOW() WHERE id=$2", n, id)
+	var fRaw sql.NullString
+	db.DB.QueryRow("SELECT features::text FROM projects WHERE id=$1", id).Scan(&fRaw)
+	if fRaw.Valid && fRaw.String != "" {
+		var feats []map[string]interface{}
+		if json.Unmarshal([]byte(fRaw.String), &feats) == nil {
+			found := false
+			for i, f := range feats {
+				if l, ok := f["label"]; ok && l == "用户数" {
+					feats[i]["value"] = n
+					found = true
+					break
+				}
+			}
+			if !found {
+				feats = append(feats, map[string]interface{}{"label": "用户数", "value": n})
+			}
+			b, _ := json.Marshal(feats)
+			db.DB.Exec("UPDATE projects SET features=$1 WHERE id=$2", string(b), id)
+		}
 	}
 }
 
