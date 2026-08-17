@@ -506,8 +506,24 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	// Non-super_admin must never modify dsn — force keep-current.
 	// (Value-based masking check is fragile: payload encoding varies.)
+	// Same for every process-control field: startup_command/service_name feed
+	// procmgr's exec, port feeds nginx proxy_pass — a project_admin writing
+	// them is low-privilege RCE/config injection (R12 security).
 	if r.Header.Get("X-Role") != "super_admin" {
 		p.DSN = ""
+		p.StartupCommand = ""
+		p.ServiceName = ""
+		p.BackendURL = ""
+		p.HealthURL = ""
+		p.Port = ""
+	}
+	// Port feeds nginx proxy_pass directly — must be a plain 1-65535 number
+	// for everyone, super_admin included (R12 security: config injection).
+	if p.Port != "" {
+		if n, err := strconv.Atoi(p.Port); err != nil || n < 1 || n > 65535 {
+			auth.JSONErr(w, 400, "端口必须是 1-65535 的数字")
+			return
+		}
 	}
 	// Detect which optional fields were present in the request
 	var raw map[string]json.RawMessage

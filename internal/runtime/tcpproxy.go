@@ -129,7 +129,12 @@ func (tp *TCPProxy) IdleMonitor() {
 					if uptime, ok := st["uptime_sec"].(int); ok && uptime > 300 {
 						var svcName string
 						db.DB.QueryRow("SELECT COALESCE(service_name,'') FROM projects WHERE id=$1", projectID).Scan(&svcName)
-						// Only auto-stop if NOT a systemd unit (systemd handles its own lifecycle)
+						// Only auto-stop if NOT a systemd unit (systemd handles its own lifecycle).
+						// svcName was queried but never used — the stop fired for
+						// managed services too (R12 code review).
+						if svcName != "" {
+							continue
+						}
 						if _, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%v", st["port"]), 2*time.Second); err != nil {
 							log.Printf("tcp-proxy: %s backend unreachable, stopping idle process", projectID)
 							ProcMgr.Stop(projectID)

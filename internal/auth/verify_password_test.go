@@ -71,7 +71,7 @@ func TestVerifyPassword(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ok, legacy := verifyPassword(c.stored, c.payload, c.salt)
+			ok, legacy := VerifyPassword(c.stored, c.payload, c.salt)
 			if ok != c.wantOK || legacy != c.wantLegacy {
 				t.Errorf("got ok=%v legacy=%v want ok=%v legacy=%v", ok, legacy, c.wantOK, c.wantLegacy)
 			}
