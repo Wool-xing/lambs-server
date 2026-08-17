@@ -400,6 +400,8 @@ func main() {
 	}
 	defer db.DB.Close()
 	auth.EnsureForgotSchema()
+	runtime.EnsureCronSchema()
+	runtime.StartCronScheduler()
 	// Thumbnail columns synchronously before the listener starts (a delayed
 	// ALTER once left the users table without avatar_thumb and ListUsers
 	// returned empty rows). The legacy backfill runs in the background so a
@@ -568,6 +570,11 @@ func main() {
 	mux.HandleFunc("GET /api/system/health", a(handleSystemHealth))
 	mux.HandleFunc("GET /api/logs/aggregated", a(handleAggregatedLogs))
 	mux.HandleFunc("GET /api/logs/system", a(handlers.HandleSystemLogs))
+	mux.HandleFunc("GET /api/projects/{id}/tasks", sa(handlers.ListTasks))
+	mux.HandleFunc("POST /api/projects/{id}/tasks", sa(handlers.CreateTask))
+	mux.HandleFunc("PUT /api/tasks/{id}", sa(handlers.UpdateTask))
+	mux.HandleFunc("DELETE /api/tasks/{id}", sa(handlers.DeleteTask))
+	mux.HandleFunc("POST /api/tasks/{id}/run", sa(handlers.RunTaskNow))
 
 	// Runtime API
 	mux.HandleFunc("POST /api/runtime/detect", sa(handleDetectStartup))
