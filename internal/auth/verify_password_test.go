@@ -24,6 +24,7 @@ func TestVerifyPassword(t *testing.T) {
 		name       string
 		stored     string // bcrypt input at storage time
 		payload    string // what the client sends now
+		salt       string // account salt
 		wantOK     bool
 		wantLegacy bool
 	}{
@@ -31,6 +32,7 @@ func TestVerifyPassword(t *testing.T) {
 			name:       "new contract salted payload",
 			stored:     mustHash(t, sha256Hex(pwd+salt)),
 			payload:    sha256Hex(pwd + salt),
+			salt:       salt,
 			wantOK:     true,
 			wantLegacy: false,
 		},
@@ -38,6 +40,7 @@ func TestVerifyPassword(t *testing.T) {
 			name:       "legacy row, new client empty-salt payload",
 			stored:     mustHash(t, sha256Hex(pwd)),
 			payload:    sha256Hex(pwd),
+			salt:       "",
 			wantOK:     true,
 			wantLegacy: false,
 		},
@@ -45,6 +48,15 @@ func TestVerifyPassword(t *testing.T) {
 			name:       "legacy row, legacy plaintext client",
 			stored:     mustHash(t, sha256Hex(pwd)),
 			payload:    pwd,
+			salt:       "",
+			wantOK:     true,
+			wantLegacy: true,
+		},
+		{
+			name:       "upgraded row, legacy plaintext client still works",
+			stored:     mustHash(t, sha256Hex(pwd+salt)),
+			payload:    pwd,
+			salt:       salt,
 			wantOK:     true,
 			wantLegacy: true,
 		},
@@ -52,13 +64,14 @@ func TestVerifyPassword(t *testing.T) {
 			name:       "wrong password rejected",
 			stored:     mustHash(t, sha256Hex(pwd+salt)),
 			payload:    sha256Hex("wrong" + salt),
+			salt:       salt,
 			wantOK:     false,
 			wantLegacy: false,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ok, legacy := verifyPassword(c.stored, c.payload)
+			ok, legacy := VerifyPassword(c.stored, c.payload, c.salt)
 			if ok != c.wantOK || legacy != c.wantLegacy {
 				t.Errorf("got ok=%v legacy=%v want ok=%v legacy=%v", ok, legacy, c.wantOK, c.wantLegacy)
 			}
@@ -74,5 +87,17 @@ func TestIsSHA256Hex(t *testing.T) {
 		if IsSHA256Hex(s) {
 			t.Errorf("%q should fail", s)
 		}
+	}
+}
+
+func TestIsSaltHex(t *testing.T) {
+	if !IsSaltHex(NewSaltHex()) {
+		t.Error("32-hex salt should pass")
+	}
+	if IsSaltHex(sha256Hex("x")) {
+		t.Error("64-hex is not a valid salt (R7 regression: salt validation used the 64-hex matcher)")
+	}
+	if IsSaltHex("zz" + NewSaltHex()[2:]) {
+		t.Error("non-hex salt should fail")
 	}
 }

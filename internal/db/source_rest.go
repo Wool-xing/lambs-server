@@ -24,6 +24,10 @@ type RESTSource struct {
 	dsn string
 }
 
+// restHTTPClient is shared across all REST datasources — a fresh client per
+// request drops keep-alive and TLS session reuse (R12 perf review).
+var restHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 func (s *RESTSource) base() string {
 	return strings.TrimSuffix(s.dsn, "/")
 }
@@ -38,8 +42,7 @@ func (s *RESTSource) do(method, url string, body []byte) ([]byte, int, error) {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := restHTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
