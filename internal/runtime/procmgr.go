@@ -521,6 +521,7 @@ func (pm *ProcManager) serviceRunning(st *svcState) bool {
 
 // HealthMonitor checks managed processes every 30s.
 func (pm *ProcManager) HealthMonitor(enabled func() bool) {
+	lastAlert := map[string]time.Time{} // per-project alert cooldown
 	for {
 		time.Sleep(30 * time.Second)
 		if !enabled() {
@@ -554,8 +555,13 @@ func (pm *ProcManager) HealthMonitor(enabled func() bool) {
 					continue
 				}
 				log.Printf("health: %s restart failed: %v", p.name, err)
-				nid := fmt.Sprintf("n%d", time.Now().UnixNano())
-				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "alert", "进程异常", fmt.Sprintf("「%s」进程意外退出，自动重启失败: %v", p.name, err))
+				// Alert cooldown: a crash-looping process must not insert a
+				// notification every 30s (R12 perf review).
+				if time.Since(lastAlert[p.id]) > 10*time.Minute {
+					lastAlert[p.id] = time.Now()
+					nid := fmt.Sprintf("n%d", time.Now().UnixNano())
+					db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "alert", "进程异常", fmt.Sprintf("「%s」进程意外退出，自动重启失败: %v", p.name, err))
+				}
 				continue
 			}
 			nid := fmt.Sprintf("n%d", time.Now().UnixNano())

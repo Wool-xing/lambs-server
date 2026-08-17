@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -122,11 +123,43 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateUser(w http.ResponseWriter, r *http.Request, id string) {
+	// Read the body once: both the user fields and the R7 password contract
+	// (client sends salted hashes) come from the same payload.
+	body, _ := io.ReadAll(r.Body)
 	var u models.User
-	json.NewDecoder(r.Body).Decode(&u)
+	json.Unmarshal(body, &u)
+	var pwdReq struct {
+		Password    string `json:"password"`
+		OldPassword string `json:"old_password"`
+	}
+	json.Unmarshal(body, &pwdReq)
 	if u.Username == "" { auth.JSONErr(w, 400, "用户名不能为空"); return }
 	if u.Role != "super_admin" && u.Role != "project_admin" && u.Role != "viewer" { auth.JSONErr(w, 400, "角色不合法"); return }
 	if u.Status != "active" && u.Status != "disabled" { auth.JSONErr(w, 400, "状态不合法"); return }
+	if pwdReq.Password != "" {
+		// Verify the admin's own password (hashed with the ADMIN's salt).
+		adminID := r.Header.Get("X-User-ID")
+		var adminHash, adminSalt string
+		if err := db.DB.QueryRow("SELECT password_hash, COALESCE(pwd_salt,'') FROM users WHERE id=$1", adminID).Scan(&adminHash, &adminSalt); err != nil {
+			auth.JSONErr(w, 400, "管理员账号不存在")
+			return
+		}
+		if ok, _ := auth.VerifyPassword(adminHash, pwdReq.OldPassword, adminSalt); !ok {
+			auth.JSONErr(w, 400, "原密码错误")
+			return
+		}
+		// Store the new password: client payload keeps its shape; legacy
+		// plaintext wraps once WITH the target's salt.
+		var tSalt string
+		db.DB.QueryRow("SELECT COALESCE(pwd_salt,'') FROM users WHERE id=$1", id).Scan(&tSalt)
+		np := pwdReq.Password
+		if !auth.IsSHA256Hex(np) {
+			np = sha256Hex(np + tSalt)
+		}
+		h, _ := bcrypt.GenerateFromPassword([]byte(np), bcrypt.DefaultCost)
+		db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(h), id)
+		auditLog(r, "修改用户", u.Username, "管理员更新密码")
+	}
 	pa := u.ProjectAccess; if pa == "" { pa = "[]" }
 	av := u.AvatarURL; if av == "" { av = "" }
 	avThumb := ""
