@@ -39,7 +39,11 @@ func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 	for _, e := range entries {
 		// Exact project match: "app" must not list "app2_*" backups.
 		if e.Name() == id || strings.HasPrefix(e.Name(), id+"_") {
-			info, _ := e.Info()
+			info, err := e.Info()
+			if err != nil {
+				log.Printf("backups: info %s: %v", e.Name(), err)
+				continue
+			}
 			files = append(files, map[string]interface{}{"filename": e.Name(), "size_mb": float64(info.Size()) / (1024 * 1024), "created": info.ModTime().Format("2006-01-02 15:04")})
 		}
 	}
@@ -145,7 +149,8 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
 		out, err := cmd.CombinedOutput()
 		if err != nil { log.Printf("pg_dump: %s %v", string(out), err); return map[string]interface{}{"ok": false, "error": "备份执行失败"} }
-		info, _ := os.Stat(fpath)
+		info, err := os.Stat(fpath)
+		if err != nil { log.Printf("pg_dump stat: %v", err); return map[string]interface{}{"ok": false, "error": "备份文件缺失"} }
 		return map[string]interface{}{"ok": true, "filename": fname + ".sql", "size_mb": float64(info.Size()) / (1024 * 1024)}
 	}
 	return map[string]interface{}{"ok": false, "error": "unsupported db type"}

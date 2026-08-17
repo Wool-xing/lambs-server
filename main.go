@@ -594,7 +594,8 @@ func main() {
 		auth.JSONOK(w, runtime.ProcMgr.Status(r.PathValue("id")))
 	}))
 	mux.HandleFunc("GET /api/runtime/proc/list", sa(func(w http.ResponseWriter, r *http.Request) {
-		auth.JSONOK(w, map[string]interface{}{"processes": runtime.ProcMgr.List(), "count": len(runtime.ProcMgr.List())})
+		pl := runtime.ProcMgr.List()
+		auth.JSONOK(w, map[string]interface{}{"processes": pl, "count": len(pl)})
 	}))
 	mux.HandleFunc("POST /api/runtime/proxy/start/{id}", sa(func(w http.ResponseWriter, r *http.Request) {
 		if err := runtime.TCPProxyMgr.Start(r.PathValue("id")); err != nil {

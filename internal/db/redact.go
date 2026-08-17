@@ -2,12 +2,24 @@ package db
 
 import "strings"
 
-// IsSensitiveKey reports whether a column/key name carries password or token
-// data. Matches the redaction semantics of the SQL sources (case-insensitive
-// substring).
+// sensitiveKeySubstrings are the lowercase fragments that mark a column/key
+// as credential material in the data browser (R12 security: passwd/pwd/
+// api_key/secret were leaking).
+var sensitiveKeySubstrings = []string{
+	"password", "passwd", "pwd", "token", "secret", "api_key", "apikey",
+	"access_key", "private_key", "credential",
+}
+
+// IsSensitiveKey reports whether a column/key name carries credential data
+// (case-insensitive substring).
 func IsSensitiveKey(k string) bool {
 	lk := strings.ToLower(k)
-	return strings.Contains(lk, "password") || strings.Contains(lk, "token")
+	for _, s := range sensitiveKeySubstrings {
+		if strings.Contains(lk, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // RedactSensitive returns a copy of rows with password/token keys removed.

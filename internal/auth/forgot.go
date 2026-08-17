@@ -73,6 +73,12 @@ func HandleForgotRequest(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 400, "请输入用户名和邮箱")
 		return
 	}
+	// Email feeds SMTP headers — CR/LF must never reach them (R12 security:
+	// header injection).
+	if strings.ContainsAny(req.Email, "\r\n") || strings.ContainsAny(req.Username, "\r\n") {
+		JSONErr(w, 400, "账号信息不匹配")
+		return
+	}
 	var uid string
 	err := db.DB.QueryRow("SELECT id FROM users WHERE username=$1 AND email=$2 AND status='active'", req.Username, req.Email).Scan(&uid)
 	if err != nil {

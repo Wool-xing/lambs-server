@@ -536,8 +536,11 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	var cur models.Project
 	var curDS, curSvc sql.NullString
-	db.DB.QueryRow("SELECT name, description, icon_url, stack, port, db_type, dsn, backend_url, service_name, base_path, COALESCE(tags::text,'[]'), offline_msg, COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]') FROM projects WHERE id=$1", id).
-		Scan(&cur.Name, &cur.Desc, &cur.IconURL, &cur.Stack, &cur.Port, &cur.DB, &cur.DSN, &cur.BackendURL, &cur.ServiceName, &cur.BasePath, &cur.Tags, &cur.OfflineMsg, &cur.StartupCommand, &cur.HealthURL, &cur.BackupIntervalHours, &cur.BackupRetentionDays, &curDS, &curSvc)
+	if err := db.DB.QueryRow("SELECT name, description, icon_url, stack, port, db_type, dsn, backend_url, service_name, base_path, COALESCE(tags::text,'[]'), offline_msg, COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]') FROM projects WHERE id=$1", id).
+		Scan(&cur.Name, &cur.Desc, &cur.IconURL, &cur.Stack, &cur.Port, &cur.DB, &cur.DSN, &cur.BackendURL, &cur.ServiceName, &cur.BasePath, &cur.Tags, &cur.OfflineMsg, &cur.StartupCommand, &cur.HealthURL, &cur.BackupIntervalHours, &cur.BackupRetentionDays, &curDS, &curSvc); err != nil {
+		auth.JSONErr(w, 404, "项目不存在")
+		return
+	}
 	if !hasInterval {
 		p.BackupIntervalHours = cur.BackupIntervalHours
 	}
@@ -683,7 +686,10 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	var current string
-	db.DB.QueryRow("SELECT status FROM projects WHERE id=$1", id).Scan(&current)
+	if err := db.DB.QueryRow("SELECT status FROM projects WHERE id=$1", id).Scan(&current); err != nil {
+		auth.JSONErr(w, 404, "项目不存在")
+		return
+	}
 	next := "offline"
 	if current == "offline" {
 		next = "maintenance"
@@ -700,7 +706,11 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 		auth.JSONErr(w, 400, "状态只能是 online/offline/maintenance")
 		return
 	}
-	db.DB.Exec("UPDATE projects SET status=$1, updated_at=NOW() WHERE id=$2", next, id)
+	if _, err := db.DB.Exec("UPDATE projects SET status=$1, updated_at=NOW() WHERE id=$2", next, id); err != nil {
+		log.Printf("PatchProjectStatus update: %v", err)
+		auth.JSONErr(w, 500, "状态更新失败")
+		return
+	}
 	var pname string
 	db.DB.QueryRow("SELECT name FROM projects WHERE id=$1", id).Scan(&pname)
 

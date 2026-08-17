@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -55,8 +56,11 @@ func EncryptGPG(filePath string) (string, error) {
 		return filePath, nil // no encryption configured
 	}
 	outPath := filePath + ".gpg"
-	cmd := exec.Command("gpg", "--batch", "--yes", "--passphrase", secrets.gpg,
+	// Passphrase via fd 0 — argv would expose it in /proc/<pid>/cmdline
+	// (R12 security).
+	cmd := exec.Command("gpg", "--batch", "--yes", "--passphrase-fd", "0",
 		"--symmetric", "--cipher-algo", "AES256", "--output", outPath, filePath)
+	cmd.Stdin = strings.NewReader(secrets.gpg + "\n")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("gpg encrypt: %s — %w", string(out), err)
 	}
@@ -95,8 +99,13 @@ func Upload(filePath, caption string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	defer f.Close()
-	part, _ := w.CreateFormFile("document", uploadPath)
-	io.Copy(part, f)
+	part, err := w.CreateFormFile("document", filepath.Base(uploadPath))
+	if err != nil {
+		return nil, fmt.Errorf("multipart create: %w", err)
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return nil, fmt.Errorf("multipart copy: %w", err)
+	}
 	w.WriteField("chat_id", secrets.backup)
 	if caption != "" {
 		w.WriteField("caption", caption)
