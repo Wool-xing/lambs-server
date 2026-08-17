@@ -535,7 +535,11 @@ func (pm *ProcManager) HealthMonitor(enabled func() bool) {
 		if !enabled() {
 			continue
 		}
-		rows, err := db.DB.Query("SELECT id, name FROM projects WHERE status='online'")
+		// Only projects with a managed process enter the health loop. Pure
+		// datasource projects (no startup_command/service_name) have no
+		// process to check — they were misreported as "down" every cycle,
+		// spawning a useless restart attempt + log line every 30s.
+		rows, err := db.DB.Query("SELECT id, name FROM projects WHERE status='online' AND (COALESCE(startup_command,'') <> '' OR COALESCE(service_name,'') <> '')")
 		if err != nil {
 			continue
 		}
