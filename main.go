@@ -46,6 +46,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	// CPU — delta between successive calls (first call returns 0)
 	cpu := 0.0
+	hostname, _ := os.Hostname()
 	if data, err := os.ReadFile("/proc/stat"); err == nil {
 		fields := strings.Fields(strings.Split(string(data), "\n")[0])
 		if len(fields) >= 8 {
@@ -98,12 +99,14 @@ func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	auth.JSONOK(w, map[string]interface{}{
+		"hostname":        hostname,
 		"cpu_percent":     float64(int(cpu*10)) / 10,
 		"memory_used_mb":  memUsedMB,
 		"memory_total_mb": memTotalMB,
 		"disk_used_gb":    float64(int(diskUsed*10)) / 10,
 		"disk_total_gb":   float64(int(diskTotal*10)) / 10,
 		"uptime_seconds":  uptimeSec,
+		"nodes":           []interface{}{runtime.WoolSnapshot()},
 	})
 }
 
@@ -376,6 +379,7 @@ func main() {
 		json.Unmarshal(data, &lambsConfig)
 	}
 	notify.SetConfig(&lambsConfig)
+	runtime.StartNodeMonitor()
 
 	// JWT
 	auth.JWTKey = []byte(os.Getenv("JWT_SECRET"))
