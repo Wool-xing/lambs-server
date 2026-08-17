@@ -348,6 +348,17 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	if p.Features == nil {
 		p.Features = []interface{}{}
 	}
+	// Per-type live stat cards: computed from the datasource itself, so new
+	// projects get the right cards automatically. Any failure (offline
+	// source, unsupported type) keeps the stored features — page must not
+	// break, and cards carry no secrets so all roles see them.
+	if p.DSN != "" && p.DSN != "—" {
+		if stats, err := db.CollectStats(p.DB, p.DSN); err == nil {
+			if cards := db.BuildStatCards(p.DB, stats); cards != nil {
+				p.Features = cards
+			}
+		}
+	}
 	if tabsRaw.Valid {
 		json.Unmarshal([]byte(tabsRaw.String), &p.Tabs)
 	}
