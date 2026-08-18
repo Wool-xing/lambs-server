@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -75,41 +76,55 @@ func runApp1Command(cmd string, timeout time.Duration) (ok bool, out, status str
 
 // runWindowsCommand pushes the command to the Windows compute-agent
 // (POST /cmd) and returns its output. Agent unreachable or command
-// non-zero = failed.
+// non-zero = failed. One retry on transport errors — Tailscale link
+// blips are routine and must not burn a task run. The dialer gets a 10s
+// timeout of its own: without it an unreachable agent holds the whole
+// task for minutes in OS-level SYN retries.
 func runWindowsCommand(cmd string, timeout time.Duration) (bool, string, string) {
 	body, _ := json.Marshal(map[string]interface{}{"cmd": cmd, "timeout": int(timeout.Seconds())})
-	req, err := http.NewRequest("POST", agentURL+"/cmd", bytes.NewReader(body))
-	if err != nil {
-		return false, "", "failed"
+	client := http.Client{
+		Timeout: timeout + 10*time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		},
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if agentToken != "" {
-		req.Header.Set("Authorization", "Bearer "+agentToken)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequest("POST", agentURL+"/cmd", bytes.NewReader(body))
+		if err != nil {
+			return false, "", "failed"
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if agentToken != "" {
+			req.Header.Set("Authorization", "Bearer "+agentToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
+		var res struct {
+			OK     bool   `json:"ok"`
+			Code   int    `json:"code"`
+			Stdout string `json:"stdout"`
+			Stderr string `json:"stderr"`
+			Error  string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+			return false, "bad agent response", "failed"
+		}
+		out := tailLog(res.Stdout + res.Stderr)
+		if res.Error != "" {
+			out = tailLog(out + " " + res.Error)
+		}
+		if res.OK {
+			return true, out, "success"
+		}
+		return false, out, "failed"
 	}
-	client := http.Client{Timeout: timeout + 10*time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, "agent unreachable: " + err.Error(), "failed"
-	}
-	defer resp.Body.Close()
-	var res struct {
-		OK     bool   `json:"ok"`
-		Code   int    `json:"code"`
-		Stdout string `json:"stdout"`
-		Stderr string `json:"stderr"`
-		Error  string `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return false, "bad agent response", "failed"
-	}
-	out := tailLog(res.Stdout + res.Stderr)
-	if res.Error != "" {
-		out = tailLog(out + " " + res.Error)
-	}
-	if res.OK {
-		return true, out, "success"
-	}
-	return false, out, "failed"
+	return false, "agent unreachable: " + lastErr.Error(), "failed"
 }
 
 // executeTask runs one scheduled task now and persists the outcome.
