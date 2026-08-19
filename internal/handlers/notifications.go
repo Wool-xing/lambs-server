@@ -66,24 +66,30 @@ func ListNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 	if ns == nil { ns = []models.Notification{} }
 	var unreadCount int
-	db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE is_read=false"+visibleClauseCount(r)).Scan(&unreadCount)
+	visCnt, cntArgs := visibleClauseCount(r)
+	db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE is_read=false"+visCnt, cntArgs...).Scan(&unreadCount)
 	auth.JSONOK(w, map[string]interface{}{"notifications": ns, "unread_count": unreadCount, "total": len(ns), "page": page, "page_size": pageSize})
 }
 
-// visibleClauseCount mirrors visibleClause for the unread-count query (a
-// subquery filter, so no args needed).
-func visibleClauseCount(r *http.Request) string {
+// visibleClauseCount mirrors visibleClause for the unread-count query and
+// returns the uid to bind to the fragment's $1 (the count query had no bound
+// args, so unread_count was silently always 0 — QA round 2 HIGH).
+func visibleClauseCount(r *http.Request) (string, []interface{}) {
 	uid := r.Header.Get("X-User-ID")
 	if r.Header.Get("X-Role") == "super_admin" {
-		return ""
+		return "", nil
 	}
+	restrict := " AND (COALESCE(project_id,'') = '' OR project_id = ANY (SELECT jsonb_array_elements_text(project_access::jsonb) FROM users WHERE id=$1))"
 	var hasAll bool
-	db.DB.QueryRow(`SELECT EXISTS (SELECT 1 FROM jsonb_array_elements_text(
-		COALESCE((SELECT project_access FROM users WHERE id=$1), '[]'::jsonb)) WHERE value = 'all')`, uid).Scan(&hasAll)
-	if hasAll {
-		return ""
+	if err := db.DB.QueryRow(`SELECT EXISTS (SELECT 1 FROM jsonb_array_elements_text(
+		COALESCE((SELECT project_access FROM users WHERE id=$1), '[]'::jsonb)) WHERE value = 'all')`, uid).Scan(&hasAll); err != nil {
+		// fail-closed：查询失败不得按全量放行 (R25)
+		return restrict, []interface{}{uid}
 	}
-	return " AND (COALESCE(project_id,'') = '' OR project_id = ANY (SELECT jsonb_array_elements_text(project_access::jsonb) FROM users WHERE id=$1))"
+	if hasAll {
+		return "", nil
+	}
+	return restrict, []interface{}{uid}
 }
 
 // canTouchNotification reports whether the user may read/delete the row.
@@ -107,7 +113,7 @@ func canTouchNotification(r *http.Request, nid string) bool {
 		) AS pid WHERE pid IN ('all', $2)
 	)`, uid, pid).Scan(&hasAccess)
 	if err != nil {
-		return false
+		return false // fail-closed：查询失败不得放行 (R25)
 	}
 	return hasAccess
 }
