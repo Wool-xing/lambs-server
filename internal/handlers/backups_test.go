@@ -54,3 +54,28 @@ func TestDeleteBackupHonest(t *testing.T) {
 		t.Errorf("traversal delete = %d, want 404", w3.Code)
 	}
 }
+
+// TestSafeBackupPathMatrix — containment + project isolation: "app" must
+// not reach "app2_*" backups and traversal must never escape baseDir.
+func TestSafeBackupPathMatrix(t *testing.T) {
+	cases := []struct {
+		name     string
+		id       string
+		filename string
+		wantErr  bool
+	}{
+		{"own backup", "app", "app_2026.db", false},
+		{"sibling project blocked", "app", "app2_2026.db", true},
+		{"traversal blocked", "app", "../app_2026.db", true},
+		{"absolute escape blocked", "app", "/etc/passwd", true},
+		{"clean name without prefix blocked", "app", "other.db", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := safeBackupPath(c.id, c.filename)
+			if (err != nil) != c.wantErr {
+				t.Errorf("safeBackupPath(%q, %q) err = %v, wantErr %v", c.id, c.filename, err, c.wantErr)
+			}
+		})
+	}
+}
