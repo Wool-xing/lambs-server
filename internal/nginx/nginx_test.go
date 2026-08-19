@@ -49,3 +49,50 @@ func TestBuildConfigEmpty(t *testing.T) {
 		t.Error("offline handler location missing for empty project list")
 	}
 }
+
+// TestBuildConfigInjection — hostile base_path/name values must never reach
+// the managed vhost as raw directives (QA round 3 idea 4).
+func TestBuildConfigInjection(t *testing.T) {
+	oldGate := gateHost
+	gateHost = "10.0.0.9:3602"
+	defer func() { gateHost = oldGate }()
+
+	projects := []models.Project{
+		// Semicolon/brace = directive injection — rejected by the charset gate.
+		{Name: "evil; return 200;", BasePath: "/safe", Port: "3501"},
+		{Name: "safe", BasePath: "/evil;} location /owned {", Port: "3502"},
+		// Newline in name must be neutralized, not start a new directive line.
+		{Name: "line\nbreak", BasePath: "/ok", Port: "3503"},
+		// BackendURL without scheme gets http:// prefixed.
+		{Name: "noscheme", BasePath: "/ns", Port: "", BackendURL: "127.0.0.1:9000"},
+	}
+	conf := buildConfig(projects)
+
+	// Injected project skipped entirely — no location with its port.
+	if strings.Contains(conf, "3502") {
+		t.Error("injected base_path reached the config")
+	}
+	if strings.Contains(conf, "location /owned") {
+		t.Error("directive injection reached the config")
+	}
+	// The hostile name survives only inside its comment line (# ...), which
+	// is inert in nginx config syntax.
+	for _, line := range strings.Split(conf, "\n") {
+		if strings.Contains(line, "return 200") && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			t.Errorf("hostile name leaked outside a comment line: %q", line)
+		}
+	}
+	// Name newline neutralized: no raw newline before its port line appears
+	// inside a location block. Simple probe: the literal "line\nbreak" must
+	// not survive (config lines would break).
+	if strings.Contains(conf, "line\nbreak") {
+		t.Error("newline in project name survived into config")
+	}
+	if !strings.Contains(conf, "line break") {
+		t.Error("newline in name was not replaced with space")
+	}
+	// BackendURL scheme normalized.
+	if !strings.Contains(conf, "http://127.0.0.1:9000") {
+		t.Error("scheme-less backend_url not normalized")
+	}
+}

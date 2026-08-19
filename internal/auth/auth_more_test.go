@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -120,5 +121,49 @@ func TestJSONErrShape(t *testing.T) {
 	}
 	if body.Success || body.Error != "无权操作" || rr.Code != 403 {
 		t.Errorf("got %+v code=%d, want success=false error=无权操作 code=403", body, rr.Code)
+	}
+}
+
+func TestCodeMACAndRandomCode(t *testing.T) {
+	a, b := codeMAC("code-1"), codeMAC("code-2")
+	if a == "" || a == b || len(a) != 64 {
+		t.Errorf("codeMAC outputs = %q %q", a, b)
+	}
+	if codeMAC("x") == codeMAC("x") {
+		// deterministic per code
+	} else {
+		t.Error("codeMAC not deterministic")
+	}
+	c1, err := randomCode()
+	if err != nil || len(c1) != 6 {
+		t.Errorf("randomCode = %q, %v; want 6 chars", c1, err)
+	}
+	c2, _ := randomCode()
+	if c1 == c2 {
+		t.Error("randomCode collision on two draws (suspicious)")
+	}
+}
+
+func TestHandleForgotRequestValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]string
+		want int
+	}{
+		{"missing username", map[string]string{"email": "a@b.c"}, 400},
+		{"missing email", map[string]string{"username": "u"}, 400},
+		{"empty body", map[string]string{}, 400},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b, _ := json.Marshal(c.body)
+			r := httptest.NewRequest("POST", "/api/auth/forgot-password/request", bytes.NewReader(b))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			HandleForgotRequest(w, r)
+			if w.Code != c.want {
+				t.Errorf("code = %d, want %d (body %s)", w.Code, c.want, w.Body.String())
+			}
+		})
 	}
 }
