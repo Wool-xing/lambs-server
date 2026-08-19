@@ -21,7 +21,8 @@ func CheckDSNHost(dsn string) error {
 	host := ""
 	if strings.HasPrefix(dsn, "http") || strings.HasPrefix(dsn, "mongo") ||
 		strings.HasPrefix(dsn, "mysql") || strings.HasPrefix(dsn, "redis") ||
-		strings.HasPrefix(dsn, "postgres") || strings.HasPrefix(dsn, "qdrant") {
+		strings.HasPrefix(dsn, "postgres") || strings.HasPrefix(dsn, "qdrant") ||
+		strings.HasPrefix(dsn, "mssql") {
 		if u, err := url.Parse(dsn); err == nil && u.Hostname() != "" {
 			host = u.Hostname()
 			// lib/pq convertURL promotes query params to keyword args —

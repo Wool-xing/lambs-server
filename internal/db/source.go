@@ -65,6 +65,8 @@ func NewDataSource(dsn string) (DataSource, error) {
 		return &RESTSource{dsn: dsn}, nil
 	case "qdrant":
 		return &VectorSource{dsn: dsn}, nil
+	case "mssql", "sqlserver":
+		return &MSSQLSource{dsn: dsn}, nil
 	default:
 		return nil, fmt.Errorf("不支持的数据源类型: %s", scheme)
 	}
