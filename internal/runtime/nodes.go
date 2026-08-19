@@ -22,8 +22,10 @@ type NodeSnapshot struct {
 }
 
 var (
-	woolMu   sync.RWMutex
-	woolNode NodeSnapshot
+	woolMu    sync.RWMutex
+	woolNode  NodeSnapshot
+	agentMu   sync.RWMutex
+	agentNode NodeSnapshot
 )
 
 // Default wool agent URL — override with WOOL_AGENT_URL.
@@ -48,6 +50,7 @@ func pollNode(name, url string) NodeSnapshot {
 		return n
 	}
 	var raw struct {
+		Hostname    string  `json:"hostname"`
 		CPU         float64 `json:"cpu_percent"`
 		MemUsedMB   int     `json:"memory_used_mb"`
 		MemTotalMB  int     `json:"memory_total_mb"`
@@ -59,6 +62,9 @@ func pollNode(name, url string) NodeSnapshot {
 		return n
 	}
 	n.Online = true
+	if raw.Hostname != "" {
+		n.Name = raw.Hostname
+	}
 	n.CPU = raw.CPU
 	n.MemUsedMB = raw.MemUsedMB
 	n.MemTotalMB = raw.MemTotalMB
@@ -69,13 +75,18 @@ func pollNode(name, url string) NodeSnapshot {
 	return n
 }
 
-// StartNodeMonitor polls wool on a 30s ticker. Never returns.
+// StartNodeMonitor polls wool and the Windows compute agent on a 30s
+// ticker. Never returns.
 func StartNodeMonitor() {
 	poll := func() {
 		n := pollNode("wool", woolAgentURL())
 		woolMu.Lock()
 		woolNode = n
 		woolMu.Unlock()
+		a := pollNode("windows-agent", agentURL+"/health")
+		agentMu.Lock()
+		agentNode = a
+		agentMu.Unlock()
 	}
 	poll()
 	go func() {
@@ -90,4 +101,11 @@ func WoolSnapshot() NodeSnapshot {
 	woolMu.RLock()
 	defer woolMu.RUnlock()
 	return woolNode
+}
+
+// AgentSnapshot returns the last polled Windows agent metrics. Read-only.
+func AgentSnapshot() NodeSnapshot {
+	agentMu.RLock()
+	defer agentMu.RUnlock()
+	return agentNode
 }
