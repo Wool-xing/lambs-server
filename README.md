@@ -9,8 +9,8 @@ Universal project management backend. One binary manages all projects.
 cd go-server && GOOS=linux GOARCH=amd64 go build -o lambs-server .
 
 # Deploy
-scp lambs-server ubuntu@100.92.91.11:~/apps/lambs-server/
-ssh ubuntu@100.92.91.11 \
+scp lambs-server ubuntu@YOUR_SERVER:~/apps/lambs-server/
+ssh ubuntu@YOUR_SERVER \
   "sudo systemctl stop lambs-server && \
    sudo cp ~/apps/lambs-server/lambs-server /usr/local/bin/ && \
    sudo systemctl start lambs-server"
@@ -33,14 +33,14 @@ Store secrets in `/home/ubuntu/apps/lambs-server/.env` (chmod 600). See `deploy/
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Web1 (100.126.18.126)                       │
-│  nginx → /lambs/ → App1:3602               │
-│        → /QA_Test/ → gate → backend         │
-│        → /tg-webhook → App1:3601            │
+│ Web host                                    │
+│  nginx → /Lambs/ → lambs-server:3602       │
+│        → /<project>/ → gate → backend       │
+│        → /tg-webhook → tg-bot               │
 ├─────────────────────────────────────────────┤
-│ App1 (100.92.91.11)                         │
-│  lambs-server (Go/9MB)                      │
-│  tg-bot (Go/5MB, 内嵌 webhook server)        │
+│ App host                                    │
+│  lambs-server (Go)                          │
+│  tg-bot (Go, 内嵌 webhook server)            │
 │  PostgreSQL 16                              │
 │  Redis                                      │
 └─────────────────────────────────────────────┘
