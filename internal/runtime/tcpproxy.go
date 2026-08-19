@@ -193,7 +193,11 @@ func (tp *TCPProxy) IdleMonitor() {
 				if running, _ := st["running"].(bool); running {
 					if uptime, ok := st["uptime_sec"].(int); ok && uptime > 300 {
 						var svcName string
-						db.DB.QueryRow("SELECT COALESCE(service_name,'') FROM projects WHERE id=$1", projectID).Scan(&svcName)
+						if err := db.DB.QueryRow("SELECT COALESCE(service_name,'') FROM projects WHERE id=$1", projectID).Scan(&svcName); err != nil {
+							// 查询失败 = 不知道是否 systemd 管 — 宁可不杀 (QA 第 2 轮校准)。
+							log.Printf("tcp-proxy: %s svcName lookup failed, skipping idle stop: %v", projectID, err)
+							continue
+						}
 						// Only auto-stop if NOT a systemd unit (systemd handles its own lifecycle).
 						// svcName was queried but never used — the stop fired for
 						// managed services too (R12 code review).
