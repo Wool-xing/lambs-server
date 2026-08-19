@@ -33,7 +33,7 @@ func woolAgentURL() string {
 	if u := os.Getenv("WOOL_AGENT_URL"); u != "" {
 		return u
 	}
-	return "http://100.126.18.126:3901/health"
+	return "" // 未配置 WOOL_AGENT_URL = 节点监控停用（开源默认，不硬编码内网地址 R24）
 }
 
 // pollNode fetches one node's metrics. Any transport/parse failure marks

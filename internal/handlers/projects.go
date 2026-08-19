@@ -411,6 +411,11 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	if p.ID == "" {
 		p.ID = p.Repo
 	} // auto-generate ID from repo name
+	// 项目 ID 落进日志/代理文件名与路径 — 必须限制字符集防 ../ 穿越 (R24)
+	if !regexp.MustCompile(`^[a-zA-Z0-9._-]+$`).MatchString(p.ID) {
+		auth.JSONErr(w, 400, "项目 ID 仅允许字母、数字、点、下划线、连字符")
+		return
+	}
 	if p.Status == "" {
 		p.Status = "online"
 	}

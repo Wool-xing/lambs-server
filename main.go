@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -348,8 +349,14 @@ func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 		auth.JSONOK(w, map[string]interface{}{"logs": split})
 		return
 	}
-	// Runtime-managed process: tail the per-project log file
-	logPath := "/home/ubuntu/apps/lambs-server/logs/" + id + ".log"
+	// Runtime-managed process: tail the per-project log file.
+	// 双保险：ID 创建时已限字符集，这里仍做边界校验防穿越 (R24)
+	logDir := "/home/ubuntu/apps/lambs-server/logs"
+	logPath := filepath.Join(logDir, id+".log")
+	if !strings.HasPrefix(filepath.Clean(logPath), filepath.Clean(logDir)+string(filepath.Separator)) {
+		auth.JSONErr(w, 400, "非法项目 ID")
+		return
+	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		auth.JSONOK(w, map[string]interface{}{"logs": []string{}})
