@@ -53,6 +53,16 @@ func isLoopback(host string) bool {
 	return false
 }
 
+// selfLoopBackend reports whether backend would dial the proxy's own
+// listener port on a loopback host (any loopback spelling).
+func selfLoopBackend(backend, portStr string) bool {
+	host, port, err := net.SplitHostPort(backend)
+	if err != nil {
+		return false
+	}
+	return port == portStr && isLoopback(host)
+}
+
 func sourceAllowed(remote string) bool {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {
@@ -93,14 +103,15 @@ func (tp *TCPProxy) Start(projectID string) error {
 		}
 		backend = fmt.Sprintf("127.0.0.1:%s", portStr)
 	}
-	// 自环守卫：backend 与本监听端口同端口 = 代理连自己 (R25 校准发现)
-	if backend == fmt.Sprintf("127.0.0.1:%s", portStr) {
-		log.Printf("tcp-proxy: %s backend equals listener port (%s) — self-loop, skipping", projectID, portStr)
-		return nil
-	}
 	backend = strings.TrimPrefix(backend, "http://")
 	if !strings.Contains(backend, ":") {
 		backend = "127.0.0.1:" + backend
+	}
+	// 自环守卫：backend 与本监听端口同端口 = 代理连自己 (R25 校准发现)。
+	// host/port 拆分比较，覆盖 localhost / ::1 等变体，不只 127.0.0.1 字面量。
+	if selfLoopBackend(backend, portStr) {
+		log.Printf("tcp-proxy: %s backend equals listener port (%s) — self-loop, skipping", projectID, portStr)
+		return nil
 	}
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
