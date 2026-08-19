@@ -3,6 +3,8 @@ lambs-server
 lambs-server-*
 cmd/tg-bot/tg-bot
 internal/auth/lambs-server
+tg-bot-linux
+tg-bot-linux-*
 
 # 缓存
 .ruff_cache/
