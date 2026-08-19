@@ -331,9 +331,23 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 500, "密码处理失败")
 		return
 	}
+	// 注册门：部署者可用 LAMBS_ALLOW_REGISTER=false 关闭开放注册（首用户
+	// 引导完成后必做 — 否则公网部署下任何人先注册 = super_admin）。
+	if os.Getenv("LAMBS_ALLOW_REGISTER") == "false" {
+		JSONErr(w, 403, "注册已关闭，请联系管理员")
+		return
+	}
+	// 首个注册账号 = super_admin + 全项目权限：开源部署引导，否则新用户
+	// 注册成 viewer 无法建项目/用户，系统死胡同 (QA 第 4 轮上手审计)。
+	var userCount int
+	db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
+	role, access := "viewer", "[]"
+	if userCount == 0 {
+		role, access = "super_admin", `["all"]`
+	}
 	var id string
-	err = db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, pwd_salt) VALUES (gen_random_uuid(),$1,$2,$3,$4,'viewer','active','[]',$5) RETURNING id::text",
-		req.Username, req.Username, req.Email, string(hash), salt).Scan(&id)
+	err = db.DB.QueryRow("INSERT INTO users (id, username, name, email, password_hash, role, status, project_access, pwd_salt) VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,'active',$6::jsonb,$7) RETURNING id::text",
+		req.Username, req.Username, req.Email, string(hash), role, access, salt).Scan(&id)
 	if err != nil {
 		JSONErr(w, 400, "用户名或邮箱已被注册")
 		return
@@ -344,7 +358,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	claims := jwt.MapClaims{
 		"user_id":  id,
 		"username": req.Username,
-		"role":     "viewer",
+		"role":     role,
 		"tv":       0,
 		"exp":      jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
 		"iat":      jwt.NewNumericDate(time.Now()),
