@@ -50,8 +50,17 @@ func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 	auth.JSONOK(w, map[string]interface{}{"backups": files})
 }
 
+// backupBaseDir is the root of stored backups. Overridable via
+// LAMBS_BACKUP_DIR (tests + open-source deployments not on /home/ubuntu).
+var backupBaseDir = func() string {
+	if d := os.Getenv("LAMBS_BACKUP_DIR"); d != "" {
+		return d
+	}
+	return "/home/ubuntu/lambs-backups"
+}()
+
 func safeBackupPath(id, filename string) (string, error) {
-	baseDir := "/home/ubuntu/lambs-backups"
+	baseDir := backupBaseDir
 	clean := filepath.Clean(filepath.Join(baseDir, filename))
 	// Must be within baseDir and filename must belong to this project
 	// ("app" must not reach "app2_*" backups). Clean both sides so the

@@ -12,9 +12,11 @@ import (
 // a failed remove (non-empty directory) must NOT report success (QA round 3
 // calibration: os.Remove error was ignored — false success).
 func TestDeleteBackupHonest(t *testing.T) {
-	baseDir := "/home/ubuntu/lambs-backups"
-	os.MkdirAll(baseDir, 0755)
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
+	os.Setenv("LAMBS_BACKUP_DIR", baseDir)
+	defer os.Unsetenv("LAMBS_BACKUP_DIR")
+	backupBaseDir = baseDir
+	defer func() { backupBaseDir = "/home/ubuntu/lambs-backups" }()
 
 	saReq := func() *http.Request {
 		r := httptest.NewRequest("DELETE", "/api/backups/proj-a/download/x", nil)
