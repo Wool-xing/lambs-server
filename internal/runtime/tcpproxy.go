@@ -22,9 +22,15 @@ type TCPProxy struct {
 }
 
 // allowedSources: TCP_PROXY_ALLOWED_IPS 逗号分隔的来源 IP 白名单。
-// 空 = 不限制（兼容现状）。生产应设 wool 的公网 IP — 否则任何公网
-// 连接可绕过 nginx auth_request 直达后端 (R24)。
+// 空 = fail-closed：仅回环放行，任何非回环连接被拒 (QA 第 2 轮 HIGH)。
+// 生产应设 wool 的公网 IP — 否则代理只对本机可用，不会裸奔公网。
 var allowedSources = parseAllowedSources(os.Getenv("TCP_PROXY_ALLOWED_IPS"))
+
+func init() {
+	if len(allowedSources) == 0 {
+		log.Printf("tcp-proxy: TCP_PROXY_ALLOWED_IPS unset — only loopback sources allowed (fail-closed)")
+	}
+}
 
 func parseAllowedSources(s string) map[string]bool {
 	m := map[string]bool{}
@@ -37,13 +43,23 @@ func parseAllowedSources(s string) map[string]bool {
 	return m
 }
 
-func sourceAllowed(remote string) bool {
-	if len(allowedSources) == 0 {
+func isLoopback(host string) bool {
+	if host == "localhost" {
 		return true
 	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+func sourceAllowed(remote string) bool {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {
 		return false
+	}
+	if isLoopback(host) {
+		return true
 	}
 	return allowedSources[host]
 }
@@ -76,6 +92,11 @@ func (tp *TCPProxy) Start(projectID string) error {
 			return nil
 		}
 		backend = fmt.Sprintf("127.0.0.1:%s", portStr)
+	}
+	// 自环守卫：backend 与本监听端口同端口 = 代理连自己 (R25 校准发现)
+	if backend == fmt.Sprintf("127.0.0.1:%s", portStr) {
+		log.Printf("tcp-proxy: %s backend equals listener port (%s) — self-loop, skipping", projectID, portStr)
+		return nil
 	}
 	backend = strings.TrimPrefix(backend, "http://")
 	if !strings.Contains(backend, ":") {
