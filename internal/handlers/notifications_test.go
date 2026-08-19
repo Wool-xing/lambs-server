@@ -40,20 +40,23 @@ func TestListNotificationsUnreadCount(t *testing.T) {
 		('n4', 'app', 'info', 'a3', true)`)
 
 	cases := []struct {
-		name string
-		uid  string
-		role string
-		want int
+		name      string
+		uid       string
+		role      string
+		want      int
+		wantTotal int
 	}{
-		{"super_admin sees all", "u-x", "super_admin", 3},
-		{"all access sees all", "u-all", "user", 3},
-		{"app sees global+app", "u-app", "user", 2},
-		{"app2 sees global+app2", "u-app2", "user", 2},
-		{"unknown user sees global only", "u-none", "user", 1},
+		{"super_admin sees all", "u-x", "super_admin", 3, 4},
+		{"all access sees all", "u-all", "user", 3, 4},
+		{"app sees global+app", "u-app", "user", 2, 3},
+		{"app2 sees global+app2", "u-app2", "user", 2, 2},
+		{"unknown user sees global only", "u-none", "user", 1, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/api/notifications", nil)
+			// page_size=1 makes total distinguishable from len(page): total
+			// must be the full matching count, not the page size (QA round 2).
+			r := httptest.NewRequest("GET", "/api/notifications?page_size=1", nil)
 			r.Header.Set("X-User-ID", c.uid)
 			r.Header.Set("X-Role", c.role)
 			w := httptest.NewRecorder()
@@ -70,6 +73,9 @@ func TestListNotificationsUnreadCount(t *testing.T) {
 			}
 			if body.Data.UnreadCount != c.want {
 				t.Errorf("unread_count = %d, want %d (body %s)", body.Data.UnreadCount, c.want, w.Body.String())
+			}
+			if body.Data.Total != c.wantTotal {
+				t.Errorf("total = %d, want %d (body %s)", body.Data.Total, c.wantTotal, w.Body.String())
 			}
 		})
 	}
