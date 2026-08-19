@@ -1,0 +1,133 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+
+	"lambs-server-go/internal/auth"
+	"lambs-server-go/internal/db"
+)
+
+// TestRealBackendSmoke — true end-to-end against the real mux and a real
+// PostgreSQL (no mocks): register → me → projects → notifications → health.
+// Gated on LAMBS_TEST_PG_DSN like the other integration tests (QA round 2
+// test idea 4: the Playwright suite mocks every API call, so backend
+// contract drift is invisible there — this closes that gap).
+func TestRealBackendSmoke(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL E2E skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	auth.JWTKey = []byte("e2e-test-jwt-secret-32-bytes-long")
+
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE EXTENSION IF NOT EXISTS pgcrypto`)
+	mustExec(`DROP TABLE IF EXISTS audit_logs; DROP TABLE IF EXISTS notifications; DROP TABLE IF EXISTS projects; DROP TABLE IF EXISTS users;`)
+	mustExec(`CREATE TABLE users (
+		id UUID PRIMARY KEY, username TEXT UNIQUE, name TEXT, email TEXT UNIQUE,
+		password_hash TEXT, role TEXT DEFAULT 'viewer', status TEXT DEFAULT 'active',
+		token_version INT DEFAULT 0, pwd_salt TEXT DEFAULT '',
+		project_access JSONB NOT NULL DEFAULT '[]',
+		avatar_url TEXT DEFAULT '', avatar_thumb TEXT DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`CREATE TABLE audit_logs (id SERIAL PRIMARY KEY, user_id TEXT, user_name TEXT, action TEXT, target TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`CREATE TABLE notifications (id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT, content TEXT NOT NULL DEFAULT '', is_read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMP NOT NULL DEFAULT now())`)
+	mustExec(`CREATE TABLE projects (
+		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT,
+		stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0,
+		status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false,
+		icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT,
+		startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT,
+		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
+		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
+		updated_at TIMESTAMPTZ DEFAULT now(),
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+
+	ts := httptest.NewServer(newMux())
+	defer ts.Close()
+
+	do := func(method, path, token string, body interface{}) (int, map[string]interface{}) {
+		var rd io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rd = bytes.NewReader(b)
+		}
+		req, err := http.NewRequest(method, ts.URL+path, rd)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		var parsed map[string]interface{}
+		json.Unmarshal(raw, &parsed)
+		return resp.StatusCode, parsed
+	}
+
+	// 1. Register (plaintext password) → auto-login token.
+	code, body := do("POST", "/api/auth/register", "", map[string]interface{}{
+		"username": "e2e_smoke", "email": "e2e@smoke.test", "password": "secret123",
+	})
+	if code != 201 {
+		t.Fatalf("register = %d (%v)", code, body)
+	}
+	data := body["data"].(map[string]interface{})
+	token, _ := data["access_token"].(string)
+	if token == "" {
+		t.Fatalf("register returned no token: %v", body)
+	}
+
+	// 2. /api/auth/me with the token.
+	code, body = do("GET", "/api/auth/me", token, nil)
+	if code != 200 {
+		t.Fatalf("me = %d (%v)", code, body)
+	}
+	if u := body["data"].(map[string]interface{})["username"]; u != "e2e_smoke" {
+		t.Errorf("me username = %v, want e2e_smoke", u)
+	}
+
+	// 3. /api/projects — contract must still match the handler's column list.
+	code, body = do("GET", "/api/projects", token, nil)
+	if code != 200 {
+		t.Fatalf("projects = %d (%v)", code, body)
+	}
+
+	// 4. /api/notifications — unread_count contract (the field QA round 2 fixed).
+	code, body = do("GET", "/api/notifications", token, nil)
+	if code != 200 {
+		t.Fatalf("notifications = %d (%v)", code, body)
+	}
+	if nd := body["data"].(map[string]interface{}); nd["unread_count"] == nil {
+		t.Errorf("notifications response missing unread_count: %v", nd)
+	}
+
+	// 5. /api/health — public contract.
+	code, body = do("GET", "/api/health", "", nil)
+	if code != 200 || body["data"].(map[string]interface{})["status"] != "ok" {
+		t.Fatalf("health = %d (%v)", code, body)
+	}
+
+	fmt.Println("smoke ok: register → me → projects → notifications → health")
+}
