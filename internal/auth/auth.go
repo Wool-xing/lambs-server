@@ -30,7 +30,7 @@ var corsOrigin = os.Getenv("CORS_ORIGIN")
 var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_.\-\p{Han}]+$`)
 
 func init() {
-	if corsOrigin == "" { corsOrigin = "https://wool.cc.cd" }
+	// CORS 源经 CORS_ORIGIN env 配置；未配置 = 仅同源（开源默认，不硬编码域名 R24）
 }
 
 func sha256Hex(s string) string {

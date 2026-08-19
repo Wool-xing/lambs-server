@@ -25,7 +25,12 @@ var secrets struct {
 var httpClient = &http.Client{Timeout: 60 * time.Second}
 
 func loadSecrets() {
-	data, err := os.ReadFile("/opt/wool-tools/.tg-secrets")
+	// 凭据路径经 TG_SECRETS_PATH 配置；未配置 = TG 备份通道停用（开源默认 R24）
+	p := os.Getenv("TG_SECRETS_PATH")
+	if p == "" {
+		return
+	}
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return
 	}

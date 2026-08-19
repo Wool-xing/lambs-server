@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,33 @@ type TCPProxy struct {
 	mu        sync.RWMutex
 	listeners map[string]net.Listener
 	actives   map[string]*int64 // active connection count per project
+}
+
+// allowedSources: TCP_PROXY_ALLOWED_IPS 逗号分隔的来源 IP 白名单。
+// 空 = 不限制（兼容现状）。生产应设 wool 的公网 IP — 否则任何公网
+// 连接可绕过 nginx auth_request 直达后端 (R24)。
+var allowedSources = parseAllowedSources(os.Getenv("TCP_PROXY_ALLOWED_IPS"))
+
+func parseAllowedSources(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			m[p] = true
+		}
+	}
+	return m
+}
+
+func sourceAllowed(remote string) bool {
+	if len(allowedSources) == 0 {
+		return true
+	}
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return false
+	}
+	return allowedSources[host]
 }
 
 var TCPProxyMgr = &TCPProxy{
@@ -81,6 +109,11 @@ func (tp *TCPProxy) serve(projectID string, ln net.Listener, backend string, cou
 		client, err := ln.Accept()
 		if err != nil {
 			return
+		}
+		if !sourceAllowed(client.RemoteAddr().String()) {
+			client.Close()
+			log.Printf("tcp-proxy: %s rejected connection from %s (not in allowlist)", projectID, client.RemoteAddr())
+			continue
 		}
 		go func() {
 			defer client.Close()

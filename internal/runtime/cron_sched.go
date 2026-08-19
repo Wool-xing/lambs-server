@@ -27,7 +27,7 @@ func defaultAgentURL() string {
 	if u := os.Getenv("COMPUTE_AGENT_URL"); u != "" {
 		return u
 	}
-	return "http://100.104.214.17:19527"
+	return "" // 未配置 COMPUTE_AGENT_URL = windows 通道不可用（开源默认，不硬编码内网地址 R24）
 }
 
 // EnsureCronSchema creates the scheduled_tasks table (idempotent).
