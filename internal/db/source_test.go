@@ -12,6 +12,7 @@ func TestParseScheme(t *testing.T) {
 		"http://h/api":                        "http",
 		"https://h/api":                        "https",
 		"no-scheme-here":                      "",
+		"mssql://sa:p@h:1433/db":               "mssql",
 	}
 	for dsn, want := range cases {
 		if got := parseScheme(dsn); got != want {
@@ -34,6 +35,8 @@ func TestNewDataSourceRouting(t *testing.T) {
 		"http://127.0.0.1/api":                        "http",
 		"https://127.0.0.1/api": "http", // both are RESTSource
 		"qdrant://127.0.0.1:6333":                     "qdrant",
+		"mssql://sa:p@127.0.0.1:1433/db":              "mssql",
+		"sqlserver://sa:p@127.0.0.1:1433/db":          "mssql",
 	}
 	for dsn, wantType := range cases {
 		src, err := NewDataSource(dsn)
@@ -57,6 +60,8 @@ func TestNewDataSourceRouting(t *testing.T) {
 			got = "http"
 		case *VectorSource:
 			got = "qdrant"
+		case *MSSQLSource:
+			got = "mssql"
 		}
 		if got != wantType {
 			t.Errorf("NewDataSource(%q) routed to %q, want %q", dsn, got, wantType)

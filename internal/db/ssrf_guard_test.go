@@ -41,6 +41,11 @@ func TestCheckDSNHost(t *testing.T) {
 		{"postgres url query hostaddr blocked", "postgres://8.8.8.8:5432/db?hostaddr=169.254.169.254", true},
 		{"postgres keyword spaced-equals blocked", "host = 10.0.0.5 port=5432 user=u", true},
 		{"postgres keyword dual loopback ok", "host=127.0.0.1 hostaddr=127.0.0.1 port=5432 user=u", false},
+		{"mssql loopback ok", "mssql://sa:p@127.0.0.1:1433/db", false},
+		{"mssql tailscale ok", "mssql://sa:p@100.92.91.11:1433/db", false},
+		{"mssql private blocked", "mssql://sa:p@192.168.1.5:1433/db", true},
+		{"mssql metadata blocked", "mssql://sa:p@169.254.169.254:1433/db", true},
+		{"uppercase mssql bypass blocked", "MSSQL://sa:p@169.254.169.254:1433/db", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

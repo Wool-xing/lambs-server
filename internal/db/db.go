@@ -117,6 +117,20 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 		conn.Close()
 		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mysql"}
 	}
+	// SQL Server: TCP health check (no driver needed)
+	if strings.Contains(dsn, "mssql") {
+		host := "127.0.0.1:1433"
+		if u, err := url.Parse(dsn); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if err != nil {
+			log.Printf("testDSN mssql: %v", err)
+			return map[string]interface{}{"reachable": false, "error": "连接失败", "db_type": "mssql"}
+		}
+		conn.Close()
+		return map[string]interface{}{"reachable": true, "latency_ms": 0, "db_type": "mssql"}
+	}
 	// MongoDB: TCP health check (no driver needed)
 	if strings.Contains(dsn, "mongodb") {
 		host := "127.0.0.1:27017"
