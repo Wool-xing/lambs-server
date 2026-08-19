@@ -69,7 +69,6 @@ func (s *RedisSource) ListCollections() ([]string, error) {
 	if err != nil {
 		return []string{}, err
 	}
-	defer c.Close()
 	// Full key sweep — a single SCAN call caps at count keys, silently
 	// truncating larger keyspaces. Loop the cursor to completion.
 	keys := []string{}
@@ -107,7 +106,6 @@ func (s *RedisSource) ReadItems(collection string, limit, offset int) ([]map[str
 	if err != nil {
 		return nil, nil, "", err
 	}
-	defer c.Close()
 	key := collection
 	t := s.keyType(ctx, c, key)
 	rows := []map[string]interface{}{}
@@ -179,7 +177,6 @@ func (s *RedisSource) InsertItem(collection string, data map[string]interface{})
 	if err != nil {
 		return err
 	}
-	defer c.Close()
 	key := collection
 	switch str(data["type"]) {
 	case "string":
@@ -210,7 +207,6 @@ func (s *RedisSource) UpdateItem(collection, pkCol, pkVal string, data map[strin
 	if err != nil {
 		return err
 	}
-	defer c.Close()
 	switch str(data["type"]) {
 	case "list":
 		idx, err := strconv.ParseInt(pkVal, 10, 64)
@@ -236,7 +232,6 @@ func (s *RedisSource) DeleteItem(collection, pkCol, pkVal string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
 	return c.Del(ctx, collection).Err()
 }
 
@@ -260,7 +255,6 @@ func (s *RedisSource) CountItems(collection string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer c.Close()
 	key := collection
 	// go-redis Type returns "none" (not an error, not "") for missing keys —
 	// the error must propagate, and "none" is the empty-collection case.

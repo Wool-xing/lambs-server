@@ -150,8 +150,20 @@ func (pm *ProcManager) Start(projectID string) error {
 	} else {
 		return fmt.Errorf("project %s has no service_name or startup_command", projectID)
 	}
+	// 被管项目进程继承 env 必须剔除 Lambs 自身凭据面 — COMPUTE_AGENT_TOKEN
+	// 落到项目代码手里 = 可驱动另一台机的 SYSTEM /cmd (R24)。逐前缀 blocklist，
+	// 保持白名单外的既有行为不变。
+	blocked := []string{"DATABASE_URL=", "JWT_SECRET=", "COMPUTE_AGENT_TOKEN=", "COMPUTE_AGENT_URL=",
+		"WOOL_AGENT_URL=", "LAMBS_", "TG_", "SMTP_PASSWORD=", "GITHUB_TOKEN=", "CLOUDFLARE_"}
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "DATABASE_URL=") && !strings.HasPrefix(e, "JWT_SECRET=") {
+		bad := false
+		for _, b := range blocked {
+			if strings.HasPrefix(e, b) {
+				bad = true
+				break
+			}
+		}
+		if !bad {
 			cmd.Env = append(cmd.Env, e)
 		}
 	}
@@ -382,9 +394,10 @@ func (pm *ProcManager) AttachServices(projectID string) {
 			pm.services[name] = st
 		}
 		st.refs[projectID] = true
+		postLen := len(st.refs) // 锁内取 — 解锁后读 map 会与 Detach 并发写竞态 (R24)
 		first := preLen == 0
 		pm.mu.Unlock()
-		log.Printf("runtime: attach service %s project=%s pre=%d post=%d first=%v", name, projectID, preLen, len(st.refs), first)
+		log.Printf("runtime: attach service %s project=%s pre=%d post=%d first=%v", name, projectID, preLen, postLen, first)
 		if first {
 			if err := pm.startShared(st); err != nil {
 				log.Printf("runtime: shared service %s start failed: %v", name, err)
@@ -413,12 +426,13 @@ func (pm *ProcManager) DetachServices(projectID string) {
 			continue
 		}
 		delete(st.refs, projectID)
-		last := len(st.refs) == 0
+		refsNow := len(st.refs) // 锁内取 (R24)
+		last := refsNow == 0
 		if last {
 			delete(pm.services, name)
 		}
 		pm.mu.Unlock()
-		log.Printf("runtime: detach service %s project=%s refs=%d last=%v", name, projectID, len(st.refs), last)
+		log.Printf("runtime: detach service %s project=%s refs=%d last=%v", name, projectID, refsNow, last)
 		if last {
 			pm.stopShared(st)
 		}
@@ -444,7 +458,9 @@ func (pm *ProcManager) startShared(st *svcState) error {
 	os.MkdirAll(logDir, 0755)
 	lf, err := os.OpenFile(logDir+"/svc-"+st.name+".log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err == nil {
-		st.logFile = lf
+		pm.mu.Lock()
+		st.logFile = lf // 锁内写 — 与 HealthMonitor 读路径竞态 (R24)
+		pm.mu.Unlock()
 	}
 	cmd := exec.Command("bash", "-c", st.startCmd)
 	if lf != nil {
@@ -466,9 +482,11 @@ func (pm *ProcManager) startShared(st *svcState) error {
 		pm.mu.Unlock()
 		return err
 	}
-	st.cmd = cmd
+	pm.mu.Lock()
+	st.cmd = cmd // 锁内写 (R24)
 	done := make(chan struct{})
 	st.done = done
+	pm.mu.Unlock()
 	go func() {
 		cmd.Wait()
 		pm.mu.Lock()
@@ -512,6 +530,9 @@ func (pm *ProcManager) stopShared(st *svcState) {
 // serviceRunning checks whether a shared service is actually up.
 // systemctl-style commands are checked via is-active; direct runs via pid.
 func (pm *ProcManager) serviceRunning(st *svcState) bool {
+	pm.mu.Lock()
+	cmd := st.cmd // 锁内读 — 与 Wait goroutine 的置 nil 竞态 (R24)
+	pm.mu.Unlock()
 	if strings.Contains(st.startCmd, "systemctl") {
 		fields := strings.Fields(st.startCmd)
 		for i, f := range fields {
@@ -524,7 +545,7 @@ func (pm *ProcManager) serviceRunning(st *svcState) bool {
 		}
 		return false
 	}
-	return st.cmd != nil && st.cmd.Process != nil
+	return cmd != nil && cmd.Process != nil
 }
 
 // HealthMonitor checks managed processes every 30s.

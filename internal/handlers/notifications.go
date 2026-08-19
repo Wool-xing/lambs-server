@@ -20,9 +20,11 @@ func visibleClause(r *http.Request) (string, []interface{}) {
 	if r.Header.Get("X-Role") == "super_admin" {
 		return "", nil
 	}
-	var pa string
-	db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", uid).Scan(&pa)
-	if strings.Contains(pa, "all") {
+	// 精确成员判断 — 子串匹配会越权（"alliance" 含 "all"）(R24)
+	var hasAll bool
+	db.DB.QueryRow(`SELECT EXISTS (SELECT 1 FROM jsonb_array_elements_text(
+		COALESCE((SELECT project_access FROM users WHERE id=$1), '[]'::jsonb)) WHERE value = 'all')`, uid).Scan(&hasAll)
+	if hasAll {
 		return "", nil
 	}
 	return "COALESCE(project_id,'') = '' OR project_id = ANY (SELECT jsonb_array_elements_text(project_access::jsonb) FROM users WHERE id=$1)", []interface{}{uid}
@@ -75,9 +77,10 @@ func visibleClauseCount(r *http.Request) string {
 	if r.Header.Get("X-Role") == "super_admin" {
 		return ""
 	}
-	var pa string
-	db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", uid).Scan(&pa)
-	if strings.Contains(pa, "all") {
+	var hasAll bool
+	db.DB.QueryRow(`SELECT EXISTS (SELECT 1 FROM jsonb_array_elements_text(
+		COALESCE((SELECT project_access FROM users WHERE id=$1), '[]'::jsonb)) WHERE value = 'all')`, uid).Scan(&hasAll)
+	if hasAll {
 		return ""
 	}
 	return " AND (COALESCE(project_id,'') = '' OR project_id = ANY (SELECT jsonb_array_elements_text(project_access::jsonb) FROM users WHERE id=$1))"
@@ -96,9 +99,17 @@ func canTouchNotification(r *http.Request, nid string) bool {
 	if pid == "" {
 		return true // global row
 	}
-	var pa string
-	db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", uid).Scan(&pa)
-	return strings.Contains(pa, "all") || strings.Contains(pa, pid)
+	// 精确匹配：JSON 文本子串匹配会越权（"app" 命中 "app2"、"all" 命中 "fall"）(R24)
+	var hasAccess bool
+	err := db.DB.QueryRow(`SELECT EXISTS (
+		SELECT 1 FROM jsonb_array_elements_text(
+			COALESCE((SELECT project_access FROM users WHERE id=$1), '[]'::jsonb)
+		) AS pid WHERE pid IN ('all', $2)
+	)`, uid, pid).Scan(&hasAccess)
+	if err != nil {
+		return false
+	}
+	return hasAccess
 }
 
 func ReadNotification(w http.ResponseWriter, r *http.Request, nid string) {
@@ -115,9 +126,10 @@ func ReadAllNotifications(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("X-Role") == "super_admin" {
 		db.DB.Exec("UPDATE notifications SET is_read=true")
 	} else {
-		var pa string
-		db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", uid).Scan(&pa)
-		if strings.Contains(pa, "all") {
+		var hasAll bool
+		db.DB.QueryRow(`SELECT EXISTS (SELECT 1 FROM jsonb_array_elements_text(
+			COALESCE((SELECT project_access FROM users WHERE id=$1), '[]'::jsonb)) WHERE value = 'all')`, uid).Scan(&hasAll)
+		if hasAll {
 			db.DB.Exec("UPDATE notifications SET is_read=true")
 		} else {
 			db.DB.Exec("UPDATE notifications SET is_read=true WHERE COALESCE(project_id,'') = '' OR project_id = ANY (SELECT jsonb_array_elements_text(project_access::jsonb) FROM users WHERE id=$1)", uid)
