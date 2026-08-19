@@ -1,0 +1,98 @@
+package gate
+
+import (
+	"net/http/httptest"
+	"os"
+	"testing"
+
+	"lambs-server-go/internal/db"
+)
+
+// TestGatePathMatches — the block check must match exact path, slash-child,
+// and query-suffixed paths, but NOT sibling prefixes (a base_path "/a" must
+// not block "/ab": the error body leaks the existence of a blocked project).
+func TestGatePathMatches(t *testing.T) {
+	cases := []struct {
+		path string
+		bp   string
+		want bool
+	}{
+		{"/a", "/a", true},
+		{"/a/b", "/a", true},
+		{"/a?x=1", "/a", true},
+		{"/ab", "/a", false}, // sibling prefix must not match
+		{"/a", "/ab", false},
+		{"/a", "/b", false},
+		{"", "/a", false},
+	}
+	for _, c := range cases {
+		if got := gatePathMatches(c.path, c.bp); got != c.want {
+			t.Errorf("gatePathMatches(%q, %q) = %v, want %v", c.path, c.bp, got, c.want)
+		}
+	}
+}
+
+// TestEscapeLike — LIKE wildcards in client-controlled paths must be
+// neutralized so "%_" cannot match another project's row.
+func TestEscapeLike(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"abc", "abc"},
+		{"a_b", `a\_b`},
+		{"100%", `100\%`},
+		{`a\b`, `a\\b`},
+		{"_%\\", `\_\%\\`},
+	}
+	for _, c := range cases {
+		if got := escapeLike(c.in); got != c.want {
+			t.Errorf("escapeLike(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestHandleCheckIntegration — real PostgreSQL verification, gated on
+// LAMBS_TEST_PG_DSN. Offline/maintenance projects block their own paths;
+// sibling prefixes and unrelated paths pass through.
+func TestHandleCheckIntegration(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects;`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, base_path TEXT, status TEXT)`)
+	mustExec(`INSERT INTO projects (id, name, base_path, status) VALUES
+		('p1', 'offline proj', '/off', 'offline'),
+		('p2', 'maint proj', '/maint', 'maintenance'),
+		('p3', 'online proj', '/ok', 'online')`)
+
+	cases := []struct {
+		name     string
+		path     string
+		wantCode int
+	}{
+		{"offline own path blocked", "/off", 403},
+		{"offline child path blocked", "/off/sub", 403},
+		{"sibling prefix passes (no leak)", "/off2", 200},
+		{"unrelated path passes", "/other", 200},
+		{"maintenance blocked", "/maint", 403},
+		{"online project passes", "/ok", 200},
+		{"root passes", "/", 200},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/api/gate/check?path="+c.path, nil)
+			w := httptest.NewRecorder()
+			HandleCheck(w, r)
+			if w.Code != c.wantCode {
+				t.Errorf("code = %d, want %d (body %s)", w.Code, c.wantCode, w.Body.String())
+			}
+		})
+	}
+}

@@ -18,22 +18,22 @@ func TestMSSQLGoDSN(t *testing.T) {
 		{
 			name: "basic with database",
 			dsn:  "mssql://sa:Passw0rd@127.0.0.1:1433/mydb",
-			want: "sqlserver://sa:Passw0rd@127.0.0.1:1433?database=mydb&encrypt=true&trustservercertificate=true",
+			want: "sqlserver://sa:Passw0rd@127.0.0.1:1433?database=mydb&dial+timeout=10&encrypt=true&trustservercertificate=true",
 		},
 		{
 			name: "encrypt opt-out via query",
 			dsn:  "mssql://sa:p@h/db?encrypt=disable",
-			want: "sqlserver://sa:p@h?database=db&encrypt=disable",
+			want: "sqlserver://sa:p@h?database=db&dial+timeout=10&encrypt=disable",
 		},
 		{
 			name: "trustservercertificate opt-out",
 			dsn:  "mssql://sa:p@h/db?trustservercertificate=false",
-			want: "sqlserver://sa:p@h?database=db&encrypt=true&trustservercertificate=false",
+			want: "sqlserver://sa:p@h?database=db&dial+timeout=10&encrypt=true&trustservercertificate=false",
 		},
 		{
 			name: "special chars in password survive url roundtrip",
 			dsn:  "mssql://sa:p%40ss%3Aw@h/db",
-			want: "sqlserver://sa:p%40ss%3Aw@h?database=db&encrypt=true&trustservercertificate=true",
+			want: "sqlserver://sa:p%40ss%3Aw@h?database=db&dial+timeout=10&encrypt=true&trustservercertificate=true",
 		},
 	}
 	for _, c := range cases {

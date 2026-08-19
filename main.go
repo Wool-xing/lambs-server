@@ -480,7 +480,24 @@ func main() {
 		}
 	}()
 
-	// ── Routes ──────────────────────────────────────────
+	// ── Routes ──
+	mux := newMux()
+	// Start
+	port := lambsConfig.Port
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		if p, err := strconv.Atoi(envPort); err == nil {
+			port = p
+		}
+	}
+	if port == 0 {
+		port = 3602
+	}
+	log.Printf("Lambs Go Server on :%d", port)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), mux))
+}
+
+func newMux() *http.ServeMux {
+// ── Routes ──────────────────────────────────────────
 	mux := http.NewServeMux()
 
 	// Public. Credential endpoints get a second rate-limit layer (nginx
@@ -628,16 +645,6 @@ func main() {
 		auth.JSONOK(w, map[string]string{"proxy": r.PathValue("id"), "status": "stopped"})
 	}))
 
-	// Start
-	port := lambsConfig.Port
-	if envPort := os.Getenv("PORT"); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil {
-			port = p
-		}
-	}
-	if port == 0 {
-		port = 3602
-	}
-	log.Printf("Lambs Go Server on :%d", port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), mux))
+	return mux
 }
+

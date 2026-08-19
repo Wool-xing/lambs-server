@@ -153,20 +153,7 @@ func (pm *ProcManager) Start(projectID string) error {
 	// 被管项目进程继承 env 必须剔除 Lambs 自身凭据面 — COMPUTE_AGENT_TOKEN
 	// 落到项目代码手里 = 可驱动另一台机的 SYSTEM /cmd (R24)。逐前缀 blocklist，
 	// 保持白名单外的既有行为不变。
-	blocked := []string{"DATABASE_URL=", "JWT_SECRET=", "COMPUTE_AGENT_TOKEN=", "COMPUTE_AGENT_URL=",
-		"WOOL_AGENT_URL=", "LAMBS_", "TG_", "SMTP_PASSWORD=", "GITHUB_TOKEN=", "CLOUDFLARE_"}
-	for _, e := range os.Environ() {
-		bad := false
-		for _, b := range blocked {
-			if strings.HasPrefix(e, b) {
-				bad = true
-				break
-			}
-		}
-		if !bad {
-			cmd.Env = append(cmd.Env, e)
-		}
-	}
+	cmd.Env = filterEnv(os.Environ())
 	if startCmd == "" {
 		// Only force PORT for legacy binary-path mode — startup_command handles its own port
 		cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%s", portStr))
@@ -623,4 +610,27 @@ func (pm *ProcManager) HealthMonitor(enabled func() bool) {
 			}
 		}
 	}
+}
+
+// blockedEnvPrefixes lists the credential prefixes stripped from child
+// process environments.
+var blockedEnvPrefixes = []string{"DATABASE_URL=", "JWT_SECRET=", "COMPUTE_AGENT_TOKEN=", "COMPUTE_AGENT_URL=",
+	"WOOL_AGENT_URL=", "LAMBS_", "TG_", "SMTP_PASSWORD=", "GITHUB_TOKEN=", "CLOUDFLARE_"}
+
+// filterEnv returns env entries that carry none of the blocked prefixes.
+func filterEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		bad := false
+		for _, b := range blockedEnvPrefixes {
+			if strings.HasPrefix(e, b) {
+				bad = true
+				break
+			}
+		}
+		if !bad {
+			out = append(out, e)
+		}
+	}
+	return out
 }
