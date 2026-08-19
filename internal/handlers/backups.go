@@ -33,7 +33,7 @@ func CreateBackup(w http.ResponseWriter, r *http.Request, id string) {
 
 func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
-	dir := "/home/ubuntu/lambs-backups"
+	dir := backupBaseDir
 	entries, _ := os.ReadDir(dir)
 	files := []map[string]interface{}{}
 	for _, e := range entries {
@@ -130,7 +130,7 @@ func UploadBackupToTG(w http.ResponseWriter, r *http.Request, id, file string) {
 func doBackup(projectID, dsn string) map[string]interface{} {
 	ts := time.Now().Format("20060102-150405")
 	fname := fmt.Sprintf("%s_%s", projectID, ts)
-	dir := "/home/ubuntu/lambs-backups"
+	dir := backupBaseDir
 	os.MkdirAll(dir, 0755)
 	if strings.Contains(dsn, "sqlite") {
 		fpath := fmt.Sprintf("%s/%s.db", dir, fname)
