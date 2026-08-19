@@ -74,6 +74,25 @@ func runApp1Command(cmd string, timeout time.Duration) (ok bool, out, status str
 	return true, out, "success"
 }
 
+// agentVersion fetches /health once and returns the agent version string.
+// Best-effort: empty when unreachable or the field is absent — the version
+// prefix must never cost a task run.
+func agentVersion() string {
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(agentURL + "/health")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var h struct {
+		Version string `json:"version"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&h) != nil {
+		return ""
+	}
+	return h.Version
+}
+
 // runWindowsCommand pushes the command to the Windows compute-agent
 // (POST /cmd) and returns its output. Agent unreachable or command
 // non-zero = failed. One retry on transport errors — Tailscale link
@@ -89,6 +108,7 @@ func runWindowsCommand(cmd string, timeout time.Duration) (bool, string, string)
 		},
 	}
 	var lastErr error
+	ver := agentVersion() // best-effort, once per run
 	for attempt := 0; attempt < 2; attempt++ {
 		req, err := http.NewRequest("POST", agentURL+"/cmd", bytes.NewReader(body))
 		if err != nil {
@@ -119,6 +139,9 @@ func runWindowsCommand(cmd string, timeout time.Duration) (bool, string, string)
 		if res.Error != "" {
 			out = tailLog(out + " " + res.Error)
 		}
+		if ver != "" {
+			out = "[agent v" + ver + "] " + out
+		}
 		if res.OK {
 			return true, out, "success"
 		}
@@ -139,6 +162,7 @@ func executeTask(id, projectID, name, command, host string) {
 	if _, err := db.DB.Exec("UPDATE scheduled_tasks SET last_run_at=NOW(), last_status=$1, last_log=$2 WHERE id=$3", status, out, id); err != nil {
 		log.Printf("cron: %s update failed: %v", name, err)
 	}
+	log.Printf("cron: task %s (%s) finished: status=%s outlen=%d", name, host, status, len(out))
 	if !ok {
 		nid := fmt.Sprintf("n%d", time.Now().UnixNano())
 		db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",

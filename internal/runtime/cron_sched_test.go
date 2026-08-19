@@ -83,6 +83,32 @@ func TestRunWindowsCommandOK(t *testing.T) {
 	}
 }
 
+func TestRunWindowsCommandPrependsAgentVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.Write([]byte(`{"hostname":"LAPTOP","status":"ok","version":"2.0.1"}`))
+			return
+		}
+		w.Write([]byte(`{"ok":true,"code":0,"stdout":"scan done","stderr":"","elapsed":1.2}`))
+	}))
+	defer srv.Close()
+
+	oldURL, oldTok := agentURL, agentToken
+	agentURL, agentToken = srv.URL, "t"
+	defer func() { agentURL, agentToken = oldURL, oldTok }()
+
+	ok, out, status := runWindowsCommand("python main.py", 60*time.Second)
+	if !ok || status != "success" {
+		t.Fatalf("ok=%v status=%s", ok, status)
+	}
+	if !strings.Contains(out, "[agent v2.0.1]") {
+		t.Errorf("out missing agent version prefix: %q", out)
+	}
+	if !strings.Contains(out, "scan done") {
+		t.Errorf("out missing command output: %q", out)
+	}
+}
+
 func TestRunWindowsCommandAgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"ok":false,"code":1,"stdout":"","stderr":"module not found","elapsed":0.4}`))
