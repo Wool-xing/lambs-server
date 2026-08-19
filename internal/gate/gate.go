@@ -15,6 +15,20 @@ import (
 	"lambs-server-go/internal/db"
 )
 
+// gatePathMatches reports whether a request path falls under a project's
+// base_path: exact, slash-child, or query-suffixed. Sibling prefixes must
+// not match — blocking "/ab" for base_path "/a" leaks the project's
+// existence via the 403 body (QA round 2 test idea).
+func gatePathMatches(path, bp string) bool {
+	return path == bp || strings.HasPrefix(path, bp+"/") || strings.HasPrefix(path, bp+"?")
+}
+
+// escapeLike neutralizes LIKE wildcards in client-controlled paths so a
+// crafted X-Original-URI (e.g. "%_") cannot match another project's row.
+func escapeLike(s string) string {
+	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(s)
+}
+
 // HandleCheck verifies whether a path belongs to a blocked (offline/maintenance) project.
 func HandleCheck(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
@@ -31,7 +45,7 @@ func HandleCheck(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var bp, status, name string
 		rows.Scan(&bp, &status, &name)
-		if path == bp || strings.HasPrefix(path, bp+"/") || strings.HasPrefix(path, bp+"?") {
+		if gatePathMatches(path, bp) {
 			if status == "offline" {
 				auth.JSONErr(w, 403, "该项目已被管理员停用")
 				return
@@ -78,7 +92,7 @@ func HandleOfflinePage(w http.ResponseWriter, r *http.Request) {
 	var name, msg, icon, status string
 	// Escape LIKE wildcards in the client-controlled path so a crafted
 	// X-Original-URI (e.g. "%_") cannot match another project's row.
-	escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(path)
+	escaped := escapeLike(path)
 	db.DB.QueryRow("SELECT name, COALESCE(offline_msg,''), COALESCE(icon_url,''), status FROM projects WHERE base_path LIKE $1 ESCAPE '\\' LIMIT 1",
 		"/"+escaped+"%").Scan(&name, &msg, &icon, &status)
 	if name == "" {
