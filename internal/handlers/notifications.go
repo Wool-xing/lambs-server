@@ -51,6 +51,9 @@ func ListNotifications(w http.ResponseWriter, r *http.Request) {
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ")
 	}
+	// total = 全部匹配数（分页用），不是页内条数 (QA 第 2 轮 MEDIUM)。
+	var total int
+	db.DB.QueryRow("SELECT COUNT(*) FROM notifications"+where, args...).Scan(&total)
 	query := "SELECT id, COALESCE(project_id,''), type, title, content, COALESCE(is_read,false), COALESCE(created_at::text,'') FROM notifications" + where + " ORDER BY created_at DESC LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2)
 	args = append(args, pageSize, offset)
 	rows, err := db.DB.Query(query, args...)
@@ -68,7 +71,7 @@ func ListNotifications(w http.ResponseWriter, r *http.Request) {
 	var unreadCount int
 	visCnt, cntArgs := visibleClauseCount(r)
 	db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE is_read=false"+visCnt, cntArgs...).Scan(&unreadCount)
-	auth.JSONOK(w, map[string]interface{}{"notifications": ns, "unread_count": unreadCount, "total": len(ns), "page": page, "page_size": pageSize})
+	auth.JSONOK(w, map[string]interface{}{"notifications": ns, "unread_count": unreadCount, "total": total, "page": page, "page_size": pageSize})
 }
 
 // visibleClauseCount mirrors visibleClause for the unread-count query and
