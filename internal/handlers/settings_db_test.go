@@ -27,7 +27,8 @@ func TestDatasourcesAndAuditLogs(t *testing.T) {
 			t.Fatalf("exec %q: %v", q, err)
 		}
 	}
-	mustExec(`CREATE TABLE IF NOT EXISTS projects (
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (
 		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT,
 		icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0,
 		status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false,
