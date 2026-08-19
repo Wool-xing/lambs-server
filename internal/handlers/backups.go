@@ -50,13 +50,23 @@ func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 	auth.JSONOK(w, map[string]interface{}{"backups": files})
 }
 
+// backupBaseDir is the root of stored backups. Overridable via
+// LAMBS_BACKUP_DIR (tests + open-source deployments not on /home/ubuntu).
+var backupBaseDir = func() string {
+	if d := os.Getenv("LAMBS_BACKUP_DIR"); d != "" {
+		return d
+	}
+	return "/home/ubuntu/lambs-backups"
+}()
+
 func safeBackupPath(id, filename string) (string, error) {
-	baseDir := "/home/ubuntu/lambs-backups"
+	baseDir := backupBaseDir
 	clean := filepath.Clean(filepath.Join(baseDir, filename))
 	// Must be within baseDir and filename must belong to this project
-	// ("app" must not reach "app2_*" backups).
+	// ("app" must not reach "app2_*" backups). Clean both sides so the
+	// prefix check holds on Windows dev machines too (separator mismatch).
 	base := filepath.Base(clean)
-	if !strings.HasPrefix(clean, baseDir+"/") || (base != id && !strings.HasPrefix(base, id+"_")) {
+	if !strings.HasPrefix(clean, filepath.Clean(baseDir)+string(os.PathSeparator)) || (base != id && !strings.HasPrefix(base, id+"_")) {
 		return "", fmt.Errorf("invalid path")
 	}
 	return clean, nil
@@ -98,7 +108,12 @@ func DeleteBackup(w http.ResponseWriter, r *http.Request, id, filename string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
 	fpath, err := safeBackupPath(id, filename)
 	if err != nil { auth.JSONErr(w, 404, "备份不存在"); return }
-	os.Remove(fpath)
+	// 删除失败必须如实返回，不许假成功 (QA 第 3 轮校准)。
+	if err := os.Remove(fpath); err != nil {
+		log.Printf("DeleteBackup remove: %v", err)
+		auth.JSONErr(w, 500, "备份删除失败")
+		return
+	}
 	auth.JSONOK(w, map[string]string{"deleted": filename})
 }
 
