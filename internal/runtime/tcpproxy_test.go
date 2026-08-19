@@ -29,6 +29,29 @@ func TestParseAllowedSources(t *testing.T) {
 // TestSourceAllowedFailClosed — with no allowlist configured, only loopback
 // may connect; any public source must be rejected (QA round 1+2 HIGH: empty
 // allowlist previously meant "allow everyone").
+// TestSelfLoopBackend — the guard must catch every loopback spelling that
+// resolves to the listener port, not just the literal 127.0.0.1:port string
+// (QA round 2 calibration: localhost / ::1 variants bypassed the old check).
+func TestSelfLoopBackend(t *testing.T) {
+	cases := []struct {
+		backend string
+		port    string
+		want    bool
+	}{
+		{"127.0.0.1:8080", "8080", true},
+		{"localhost:8080", "8080", true},
+		{"[::1]:8080", "8080", true},
+		{"1.2.3.4:8080", "8080", false},
+		{"127.0.0.1:8081", "8080", false},
+		{"no-port-here", "8080", false},
+	}
+	for _, c := range cases {
+		if got := selfLoopBackend(c.backend, c.port); got != c.want {
+			t.Errorf("selfLoopBackend(%q, %q) = %v, want %v", c.backend, c.port, got, c.want)
+		}
+	}
+}
+
 func TestSourceAllowedFailClosed(t *testing.T) {
 	cases := []struct {
 		name   string
