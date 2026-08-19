@@ -33,6 +33,13 @@ func (s *MSSQLSource) goDSN() (string, error) {
 	} else if q.Get("encrypt") == "" {
 		q.Set("encrypt", "true")
 	}
+	// 拨号超时默认 10s — 挂死的 SQL Server 主机不得无限阻塞 handler
+	// (QA 第 2 轮测试想法；0 = 驱动层"无超时"，一并强制为默认)。
+	// 实测 go-mssqldb v1.10 拨号吃 "dial timeout"，"connection timeout"
+	// 只限登录阶段（实测 1s 拨号超时下 connection timeout=1 仍挂 15s）。
+	if dt := q.Get("dial timeout"); dt == "" || dt == "0" {
+		q.Set("dial timeout", "10")
+	}
 	u.Scheme = "sqlserver"
 	u.Path = ""
 	u.RawQuery = q.Encode()
