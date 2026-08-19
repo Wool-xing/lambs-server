@@ -106,7 +106,7 @@ func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		"disk_used_gb":    float64(int(diskUsed*10)) / 10,
 		"disk_total_gb":   float64(int(diskTotal*10)) / 10,
 		"uptime_seconds":  uptimeSec,
-		"nodes":           []interface{}{runtime.WoolSnapshot()},
+		"nodes":           []interface{}{runtime.WoolSnapshot(), runtime.AgentSnapshot()},
 	})
 }
 

@@ -16,7 +16,7 @@ func TestPollNodeOK(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := pollNode("wool", srv.URL+"/health")
+	n := pollNode("caller-supplied-name", srv.URL+"/health")
 	if !n.Online {
 		t.Fatal("expected online")
 	}
@@ -25,6 +25,11 @@ func TestPollNodeOK(t *testing.T) {
 	}
 	if n.Uptime != 12345 {
 		t.Errorf("uptime = %d, want 12345", n.Uptime)
+	}
+	// Hostname from /health overrides the caller-supplied name — the
+	// Windows agent reports its COMPUTERNAME and must show up as itself.
+	if n.Name != "wool" {
+		t.Errorf("name = %q, want hostname override", n.Name)
 	}
 }
 
