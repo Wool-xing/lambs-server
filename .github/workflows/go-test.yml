@@ -12,4 +12,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.0'
-      - run: go test ./...
+      # -race catches data races (procmgr/tcpproxy had three fixed in round 1);
+      # ubuntu runners ship gcc so CGO race builds work.
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Coverage report
+        run: |
+          go test -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+      - name: Coverage summary
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: coverage.out
+          fail_below_min: false
+          format: markdown
+          output: both
+          thresholds: '60 80'
+      - name: Add coverage PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request'
+        with:
+          recreate: true
+          path: code-coverage-results.md
