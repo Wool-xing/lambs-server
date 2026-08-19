@@ -7,6 +7,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lambs_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Real-DB integration tests (notifications authz matrix, gate checks,
+      # main-package E2E smoke) run against this container.
+      LAMBS_TEST_PG_DSN: postgres://postgres:postgres@127.0.0.1:5432/lambs_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,11 +34,13 @@ jobs:
           go-version: '1.25.7'
       # -race catches data races (procmgr/tcpproxy had three fixed in round 1);
       # ubuntu runners ship gcc so CGO race builds work.
+      # -p 1 serializes packages: they share one test DB and main's E2E
+      # drops/recreates the fixture tables.
       - name: Test with race detector
-        run: go test -race ./...
+        run: go test -p 1 -race ./...
       - name: Coverage report
         run: |
-          go test -coverprofile=coverage.out ./...
+          go test -p 1 -coverprofile=coverage.out ./...
           TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
           echo "Total coverage: ${TOTAL}" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}"

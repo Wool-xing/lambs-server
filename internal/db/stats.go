@@ -16,7 +16,8 @@ import (
 func typeKind(dbType string) string {
 	lt := strings.ToLower(dbType)
 	switch {
-	case strings.Contains(lt, "mysql"), strings.Contains(lt, "postgres"), strings.Contains(lt, "sqlite"):
+	case strings.Contains(lt, "mysql"), strings.Contains(lt, "postgres"), strings.Contains(lt, "sqlite"),
+		strings.Contains(lt, "mssql"), strings.Contains(lt, "sql server"):
 		return "sql"
 	case strings.Contains(lt, "mongo"):
 		return "mongo"
