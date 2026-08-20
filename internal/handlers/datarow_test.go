@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -411,4 +413,116 @@ func TestTaskUpdateDelete(t *testing.T) {
 	if w := call("DELETE", "tu-task", ""); w.Code != 404 {
 		t.Errorf("re-delete = %d, want 404", w.Code)
 	}
+}
+
+// TestMemberAddRemove — 403 gate; grant persists (exact membership, no
+// substring collisions); idempotent re-add; remove drops only the target.
+func TestMemberAddRemove(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS users CASCADE`)
+	mustExec(`CREATE TABLE users (id TEXT PRIMARY KEY, project_access JSONB NOT NULL DEFAULT '[]')`)
+	mustExec(`INSERT INTO users (id, project_access) VALUES ('mem-user','["app2"]')`)
+
+	add := func(uid string, admin bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/api/projects/app/members", strings.NewReader(`{"user_id":"`+uid+`"}`))
+		r.Header.Set("Content-Type", "application/json")
+		if admin {
+			r.Header.Set("X-Role", "super_admin")
+		}
+		w := httptest.NewRecorder()
+		AddMember(w, r, "app")
+		return w
+	}
+
+	if w := add("mem-user", false); w.Code != 403 {
+		t.Errorf("no-role add = %d, want 403", w.Code)
+	}
+	// Grant app to a user who already has app2 — exact membership means no
+	// collision and both survive.
+	if w := add("mem-user", true); w.Code != 200 {
+		t.Fatalf("add = %d", w.Code)
+	}
+	var access string
+	db.DB.QueryRow("SELECT project_access::text FROM users WHERE id='mem-user'").Scan(&access)
+	if !strings.Contains(access, `"app2"`) || !strings.Contains(access, `"app"`) {
+		t.Errorf("access after grant = %s, want both app and app2", access)
+	}
+	// Idempotent re-add: no duplicate entry.
+	add("mem-user", true)
+	db.DB.QueryRow("SELECT project_access::text FROM users WHERE id='mem-user'").Scan(&access)
+	if strings.Count(access, `"app"`) != 1 {
+		t.Errorf("duplicate grant: %s", access)
+	}
+
+	// Remove drops app, keeps app2.
+	rm := httptest.NewRequest("DELETE", "/api/projects/app/members/mem-user", nil)
+	rm.Header.Set("X-Role", "super_admin")
+	rw := httptest.NewRecorder()
+	RemoveMember(rw, rm, "app", "mem-user")
+	if rw.Code != 200 {
+		t.Fatalf("remove = %d", rw.Code)
+	}
+	db.DB.QueryRow("SELECT project_access::text FROM users WHERE id='mem-user'").Scan(&access)
+	if strings.Contains(access, `"app"`) || !strings.Contains(access, `"app2"`) {
+		t.Errorf("access after remove = %s, want app2 only", access)
+	}
+	mustExec(`DELETE FROM users WHERE id='mem-user'`)
+}
+
+// TestExportProjectUsers — sqlite project CSV: BOM + header + rows, and
+// password/token/hash columns stripped before they reach the wire.
+func TestExportProjectUsers(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 not present")
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, dsn TEXT)`)
+	src := filepath.Join(t.TempDir(), "eu.db")
+	out, err := exec.Command("sqlite3", src,
+		"CREATE TABLE users (id TEXT, name TEXT, password TEXT); INSERT INTO users VALUES ('u1','alice','pw-1'),('u2','bob','pw-2');").CombinedOutput()
+	if err != nil {
+		t.Fatalf("seed: %s %v", out, err)
+	}
+	mustExec(`DELETE FROM projects WHERE id='eu-proj'`)
+	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('eu-proj','导出',$1)`, "sqlite:///"+src)
+
+	r := httptest.NewRequest("GET", "/api/settings/export/project-users/eu-proj", nil)
+	w := httptest.NewRecorder()
+	ExportProjectUsers(w, r, "eu-proj")
+	if w.Code != 200 {
+		t.Fatalf("export = %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "alice") || !strings.Contains(body, "bob") {
+		t.Errorf("rows missing: %s", body)
+	}
+	if strings.Contains(body, "pw-1") || strings.Contains(body, "password") {
+		t.Errorf("sensitive column leaked: %s", body)
+	}
+	if !strings.HasPrefix(body, "\uFEFF") {
+		t.Error("missing UTF-8 BOM")
+	}
+	mustExec(`DELETE FROM projects WHERE id='eu-proj'`)
 }
