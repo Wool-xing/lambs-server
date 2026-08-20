@@ -15,12 +15,11 @@ type cronField struct {
 	values [60]bool
 	min    int
 	max    int
-	star   bool
 }
 
 type cronSpec struct {
 	minute, hour, dom, month, dow cronField
-	domRestricted, dowRestricted bool
+	domRestricted, dowRestricted  bool
 }
 
 func parseCronField(spec string, min, max int) (cronField, bool, error) {

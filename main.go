@@ -33,9 +33,16 @@ var cpuState = struct {
 	lastTotal uint64
 }{}
 
-func sha256Hex(s string) string {
-	// Used by handlers via import cycle — defined here as fallback
-	return handlers.SHA256Hex(s)
+// projectLogDir is where runtime-managed project log files live
+// (LAMBS_LOG_DIR env; the default matches the production layout, and
+// self-hosters point it at their own directory).
+var projectLogDir = envOr("LAMBS_LOG_DIR", "/home/ubuntu/apps/lambs-server/logs")
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +358,7 @@ func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	// Runtime-managed process: tail the per-project log file.
 	// 双保险：ID 创建时已限字符集，这里仍做边界校验防穿越 (R24)
-	logDir := "/home/ubuntu/apps/lambs-server/logs"
+	logDir := projectLogDir
 	logPath := filepath.Join(logDir, id+".log")
 	if !strings.HasPrefix(filepath.Clean(logPath), filepath.Clean(logDir)+string(filepath.Separator)) {
 		auth.JSONErr(w, 400, "非法项目 ID")
@@ -367,6 +374,12 @@ func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 		chunk = chunk[len(chunk)-64*1024:]
 	}
 	all := strings.Split(chunk, "\n")
+	// Trailing newline → phantom empty last element, which shifts the tail
+	// window by one and swallows the real last line (caught by the tail-file
+	// test). Drop trailing empties before computing the window.
+	for len(all) > 0 && all[len(all)-1] == "" {
+		all = all[:len(all)-1]
+	}
 	start := 0
 	if len(all) > lines {
 		start = len(all) - lines
@@ -497,7 +510,7 @@ func main() {
 }
 
 func newMux() *http.ServeMux {
-// ── Routes ──────────────────────────────────────────
+	// ── Routes ──────────────────────────────────────────
 	mux := http.NewServeMux()
 
 	// Public. Credential endpoints get a second rate-limit layer (nginx
@@ -647,4 +660,3 @@ func newMux() *http.ServeMux {
 
 	return mux
 }
-
