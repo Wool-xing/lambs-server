@@ -67,15 +67,19 @@ jobs:
         run: bash scripts/privacy-scan.sh .
       - name: Staticcheck (dead code)
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
+          # Pinned: @latest pulls new rule sets that can redden old code
+          # overnight (round-8 calibration). Bump deliberately.
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2
           "$(go env GOPATH)/bin/staticcheck" ./...
+      - name: Race x2 (runtime hot paths)
+        run: go test -p 1 -race -count=2 ./internal/runtime/ ./internal/notify/
       - name: Coverage report + regression gate
         run: |
           go test -p 1 -coverprofile=coverage.out ./...
           TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           # Gate at the current level: new code must not drag coverage down
           # (raise the bar as the sprint lands; round-7 calibration item).
-          THRESHOLD=42
+          THRESHOLD=46
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)"
           if awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}"; then
