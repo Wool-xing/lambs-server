@@ -78,4 +78,7 @@ jobs:
           THRESHOLD=42
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)"
-          awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}" && { echo "coverage regressed below ${THRESHOLD}%"; exit 1; }
+          if awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}"; then
+            echo "coverage regressed below ${THRESHOLD}%"
+            exit 1
+          fi
