@@ -277,3 +277,132 @@ func TestAggregatedLogsNonSAEmpty(t *testing.T) {
 		t.Errorf("aggregated = %d %s", resp.StatusCode, raw)
 	}
 }
+
+// TestProjectLogsUnknownID — unknown project must 404 and never reach the
+// log-file path (path traversal guard, R24).
+func TestProjectLogsUnknownID(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	if _, err := db.DB.Exec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, service_name TEXT)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r := httptest.NewRequest("GET", "/api/projects/no-such-id/logs", nil)
+	r.Header.Set("X-Role", "super_admin")
+	w := httptest.NewRecorder()
+	handleProjectLogs(w, r, "no-such-id")
+	if w.Code != 404 {
+		t.Errorf("code = %d, want 404", w.Code)
+	}
+}
+
+// TestProjectLogsNoServiceTail — a project without service_name tails its
+// own log file; when absent the response is 200 with empty logs (no error
+// leak), never a filesystem error body.
+func TestProjectLogsNoServiceTail(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, service_name TEXT)`)
+	mustExec(`DELETE FROM projects WHERE id='log-tail-proj'`)
+	mustExec(`INSERT INTO projects (id, name, service_name) VALUES ('log-tail-proj','无服务','')`)
+
+	r := httptest.NewRequest("GET", "/api/projects/log-tail-proj/logs", nil)
+	r.Header.Set("X-Role", "super_admin")
+	w := httptest.NewRecorder()
+	handleProjectLogs(w, r, "log-tail-proj")
+	if w.Code != 200 {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var env struct {
+		Data struct {
+			Logs []string `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Data.Logs == nil {
+		t.Error("logs = nil, want empty slice")
+	}
+	mustExec(`DELETE FROM projects WHERE id='log-tail-proj'`)
+}
+
+// TestProjectLogsTraversal — an id crafted to escape the log dir must 400.
+func TestProjectLogsTraversal(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, service_name TEXT)`)
+	mustExec(`DELETE FROM projects WHERE id='../../etc'`)
+	mustExec(`INSERT INTO projects (id, name, service_name) VALUES ('../../etc','穿越','')`)
+
+	r := httptest.NewRequest("GET", "/api/projects/../../etc/logs", nil)
+	r.Header.Set("X-Role", "super_admin")
+	w := httptest.NewRecorder()
+	handleProjectLogs(w, r, "../../etc")
+	if w.Code != 400 {
+		t.Errorf("code = %d, want 400", w.Code)
+	}
+	mustExec(`DELETE FROM projects WHERE id='../../etc'`)
+}
+
+// TestProjectLogsSvcFailure — journalctl failure surfaces as a 200 with the
+// error text inside logs (op-friendly), not a 500.
+func TestProjectLogsSvcFailure(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, service_name TEXT)`)
+	mustExec(`DELETE FROM projects WHERE id='log-svc-proj'`)
+	mustExec(`INSERT INTO projects (id, name, service_name) VALUES ('log-svc-proj','服务','no-such-svc-xyz')`)
+
+	r := httptest.NewRequest("GET", "/api/projects/log-svc-proj/logs", nil)
+	r.Header.Set("X-Role", "super_admin")
+	w := httptest.NewRecorder()
+	handleProjectLogs(w, r, "log-svc-proj")
+	if w.Code != 200 {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var env struct {
+		Data struct {
+			Logs []string `json:"logs"`
+		} `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &env)
+	if len(env.Data.Logs) == 0 || !strings.Contains(env.Data.Logs[0], "journalctl") {
+		t.Errorf("logs = %v, want journalctl error text", env.Data.Logs)
+	}
+	mustExec(`DELETE FROM projects WHERE id='log-svc-proj'`)
+}
