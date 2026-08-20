@@ -3,6 +3,7 @@ package runtime
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -52,5 +53,29 @@ func TestPollNodeBadJSON(t *testing.T) {
 
 	if n := pollNode("wool", srv.URL+"/health"); n.Online {
 		t.Fatal("expected offline for garbage body")
+	}
+}
+
+// TestAgentURLDefaults — open-source default is EMPTY (no hardcoded
+// internal nets, R24); env overrides flow through.
+func TestAgentURLDefaults(t *testing.T) {
+	os.Unsetenv("COMPUTE_AGENT_URL")
+	if defaultAgentURL() != "" {
+		t.Error("defaultAgentURL should be empty without env")
+	}
+	os.Setenv("COMPUTE_AGENT_URL", "http://agent:19527")
+	defer os.Unsetenv("COMPUTE_AGENT_URL")
+	if defaultAgentURL() != "http://agent:19527" {
+		t.Errorf("defaultAgentURL = %q", defaultAgentURL())
+	}
+
+	os.Unsetenv("WOOL_AGENT_URL")
+	if woolAgentURL() != "" {
+		t.Error("woolAgentURL should be empty without env")
+	}
+	os.Setenv("WOOL_AGENT_URL", "http://node:19528")
+	defer os.Unsetenv("WOOL_AGENT_URL")
+	if woolAgentURL() != "http://node:19528" {
+		t.Errorf("woolAgentURL = %q", woolAgentURL())
 	}
 }
