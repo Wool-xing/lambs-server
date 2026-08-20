@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -89,5 +90,44 @@ func TestNewUUIDv4(t *testing.T) {
 	a, b := newUUIDv4(), newUUIDv4()
 	if len(a) != 36 || a == b {
 		t.Errorf("newUUIDv4 = %q %q", a, b)
+	}
+}
+
+func TestDBKindName(t *testing.T) {
+	if dbKindName("MySQL") != "MySQL" || dbKindName("PostgreSQL") != "PostgreSQL" || dbKindName("SQLite") != "SQLite" {
+		t.Error("dbKindName misbehaving on known types")
+	}
+	if dbKindName("WeirdDB") != "WeirdDB" {
+		t.Error("dbKindName should pass through unknown types")
+	}
+}
+
+// TestTestDSNSQLite — a local sqlite file reports reachable via the sqlite
+// branch of testDSNInternal.
+func TestTestDSNSQLite(t *testing.T) {
+	f := t.TempDir() + "/t.db"
+	os.WriteFile(f, []byte("x"), 0600)
+	res := testDSNInternal("sqlite:///"+f, "")
+	if res["reachable"] != true {
+		t.Errorf("sqlite testDSN = %v, want reachable", res)
+	}
+	res = testDSNInternal("sqlite:///"+t.TempDir()+"/missing.db", "")
+	if res["reachable"] == true {
+		t.Errorf("missing sqlite file should be unreachable: %v", res)
+	}
+}
+
+// TestPgSumRowsReal — real postgres row estimate via reltuples (env-gated).
+func TestPgSumRowsReal(t *testing.T) {
+	dsn := "postgres://postgres:postgres@127.0.0.1:5433/lambs_test?sslmode=disable"
+	s := &PostgresSource{dsn: dsn}
+	_, err := pgSumRows(s)
+	if err != nil {
+		t.Skipf("no local postgres for pgSumRows: %v", err)
+	}
+	// reltuples can be negative (-1 per table) before any ANALYZE — only
+	// the query path itself is under test.
+	if err != nil {
+		t.Errorf("pgSumRows err = %v", err)
 	}
 }

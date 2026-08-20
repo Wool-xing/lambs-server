@@ -11,11 +11,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 PORT = int(os.environ.get("COMPUTE_PORT", "19527"))
 ALLOWED_IPS = {"127.0.0.1", "::1"}  # localhost, CIDR covers servers below
 ALLOWED_CIDRS = [
-    # 100.92.91.11/32 = app1 (Lambs server, Tailscale). The old 100.64.0.0/10
+    # Default allowlist is EMPTY for open-source deployments — configure
+    # COMPUTE_ALLOWED_CIDRS with your own server's Tailscale /32.
     # blanket covered the entire CGNAT carrier range — same-ISP neighbors in
-    # the /10 could reach the agent (R3). Keep the list narrow; extend via
+    # the /10 could reach the agent (R3). The list starts empty; extend via
     # COMPUTE_ALLOWED_CIDRS env when adding callers.
-    (0x645C5B0B, 0xFFFFFFFF),  # 100.92.91.11/32
 ]
 # Optional extra CIDRs via env, e.g. COMPUTE_ALLOWED_CIDRS=10.1.2.0/24,192.168.0.0/16
 for part in os.environ.get("COMPUTE_ALLOWED_CIDRS", "").split(","):
@@ -186,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     print(f"Compute Agent → 0.0.0.0:{PORT}")
-    print(f"Allowed: app1 Tailscale (100.92.91.11/32) + localhost + COMPUTE_ALLOWED_CIDRS")
+    print(f"Allowed: localhost + COMPUTE_ALLOWED_CIDRS")
     print(f"Auth: {'COMPUTE_TOKEN set' if COMPUTE_TOKEN else 'WARNING — COMPUTE_TOKEN not set, /cmd /python disabled'}")
     srv = HTTPServer(("0.0.0.0", PORT), Handler)
     try:

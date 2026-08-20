@@ -6,7 +6,7 @@ import (
 )
 
 // Real SQL Server verification — gated on LAMBS_MSSQL_DSN (e.g.
-// mssql://sa:LambsTest2026!@127.0.0.1:14333/master). Skipped by default in
+// mssql://sa:CHANGE_ME@127.0.0.1:14333/master). Skipped by default in
 // CI; run manually against the docker mssql-lambs-test container.
 func TestMSSQLIntegrationCRUD(t *testing.T) {
 	dsn := os.Getenv("LAMBS_MSSQL_DSN")

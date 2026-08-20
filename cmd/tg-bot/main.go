@@ -38,7 +38,7 @@ var (
 var adminChats = map[int64]bool{}
 
 func init() {
-	if webhookURL == "" { webhookURL = "https://wool.cc.cd/tg-webhook" }
+	// 开源默认不硬编码部署域名 — webhook 走 TG_WEBHOOK_URL 配置。
 	for _, s := range strings.Split(os.Getenv("TG_ADMIN_CHAT_IDS"), ",") {
 		if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil && id > 0 {
 			adminChats[id] = true

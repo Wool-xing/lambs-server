@@ -36,6 +36,8 @@ jobs:
       # ubuntu runners ship gcc so CGO race builds work.
       # -p 1 serializes packages: they share one test DB and main's E2E
       # drops/recreates the fixture tables.
+      - name: Install pg_dump (PG backup test)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
       - name: Test with race detector
         run: go test -p 1 -race ./...
       - name: Coverage report
