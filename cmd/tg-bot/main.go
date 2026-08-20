@@ -95,6 +95,16 @@ func tgAPI(method string, params url.Values) (map[string]interface{}, error) {
 	return result.Result, nil
 }
 
+// botOps is the side-effect surface of the command handlers — injected in
+// tests so every /command branch is testable without real servers.
+type botOps struct {
+	run    func(cmd string) string
+	runSSH func(host, cmd string) string
+	send   func(chatID int64, text string)
+}
+
+var bot = botOps{run: run, runSSH: runSSH, send: sendMessage}
+
 func sendMessage(chatID int64, text string) {
 	text = strings.TrimSpace(text)
 	if len(text) > 4000 {
@@ -146,9 +156,9 @@ func memLine(raw string) string {
 func svcStatus(host, name, label string) string {
 	var s string
 	if host == "" {
-		s = run(fmt.Sprintf("systemctl is-active %s 2>/dev/null || echo inactive", name))
+		s = bot.run(fmt.Sprintf("systemctl is-active %s 2>/dev/null || echo inactive", name))
 	} else {
-		s = runSSH(host, fmt.Sprintf("systemctl is-active %s 2>/dev/null || echo inactive", name))
+		s = bot.runSSH(host, fmt.Sprintf("systemctl is-active %s 2>/dev/null || echo inactive", name))
 	}
 	icon := "❌"
 	if s == "active" {
@@ -158,10 +168,14 @@ func svcStatus(host, name, label string) string {
 }
 
 func redact(s string) string {
-	s = strings.ReplaceAll(s, token, "[TOKEN]")
-	// Replace IPs
+	// 空配置跳过替换 — 空串 ReplaceAll 会在每个字符间插入标记 (QA 第 7 批)。
+	if token != "" {
+		s = strings.ReplaceAll(s, token, "[TOKEN]")
+	}
 	for _, ip := range []string{app1, app2} {
-		s = strings.ReplaceAll(s, ip, "[IP]")
+		if ip != "" {
+			s = strings.ReplaceAll(s, ip, "[IP]")
+		}
 	}
 	return s
 }
@@ -183,12 +197,12 @@ func handleCommand(chatID int64, text string) {
 	// Authorization gate: only allowlisted chat IDs may run anything. Without
 	// this, anyone who finds the bot could restart services or pull files.
 	if !adminChats[chatID] {
-		sendMessage(chatID, "未授权的会话。请在 TG_ADMIN_CHAT_IDS 中配置此 chat_id 后重试。")
+		bot.send(chatID, "未授权的会话。请在 TG_ADMIN_CHAT_IDS 中配置此 chat_id 后重试。")
 		return
 	}
 	switch {
 	case text == "/start" || text == "/help":
-		sendMessage(chatID, "🐑 Lambs 服务器管理\n\n"+
+		bot.send(chatID, "🐑 Lambs 服务器管理\n\n"+
 			"/status    所有服务状态\n"+
 			"/mem       内存占用 Top5\n"+
 			"/backup    执行备份\n"+
@@ -199,7 +213,7 @@ func handleCommand(chatID int64, text string) {
 
 	case text == "/status":
 		// App1 (local) — Lambs server
-		wm := memLine(run("free -h | grep Mem"))
+		wm := memLine(bot.run("free -h | grep Mem"))
 		ws := strings.Join([]string{
 			svcStatus("", "lambs-server", "Lambs"),
 			svcStatus("", "tg-bot", "TG Bot"),
@@ -208,28 +222,32 @@ func handleCommand(chatID int64, text string) {
 			svcStatus("", "fail2ban", "Fail2ban"),
 		}, "\n")
 		// Web1 (remote) — Nginx
-		am := memLine(runSSH(app2, "free -h | grep Mem"))
+		am := memLine(bot.runSSH(app2, "free -h | grep Mem"))
 		as := strings.Join([]string{
 			svcStatus(app2, "nginx", "Nginx"),
 			svcStatus(app2, "nginx", "Nginx"),
 			svcStatus(app2, "fail2ban", "Fail2ban"),
 		}, "\n")
-		sendMessage(chatID, fmt.Sprintf("App1 Lambs\n%s\n%s\n\nWeb1 Wool\n%s\n%s", wm, ws, am, as))
+		bot.send(chatID, fmt.Sprintf("App1 Lambs\n%s\n%s\n\nWeb1 Wool\n%s\n%s", wm, ws, am, as))
 
 	case text == "/backup":
-		sendMessage(chatID, run("/opt/wool-tools/backup-lambs.sh 2>&1")[:3800])
+		out := bot.run("/opt/wool-tools/backup-lambs.sh 2>&1")
+		if len(out) > 3800 {
+			out = out[:3800]
+		}
+		bot.send(chatID, out)
 
 	case text == "/mem":
-		wm := memLine(run("free -h | grep Mem"))
-		wp := run("ps aux --sort=-%mem | head -6")
-		am := memLine(runSSH(app2, "free -h | grep Mem"))
-		ap := runSSH(app2, "ps aux --sort=-%mem | head -6")
-		sendMessage(chatID, fmt.Sprintf("App1 Lambs\n%s\n%s\n\nWeb1 Wool\n%s\n%s", wm, wp, am, ap))
+		wm := memLine(bot.run("free -h | grep Mem"))
+		wp := bot.run("ps aux --sort=-%mem | head -6")
+		am := memLine(bot.runSSH(app2, "free -h | grep Mem"))
+		ap := bot.runSSH(app2, "ps aux --sort=-%mem | head -6")
+		bot.send(chatID, fmt.Sprintf("App1 Lambs\n%s\n%s\n\nWeb1 Wool\n%s\n%s", wm, wp, am, ap))
 
 	case text == "/ssh":
-		r1 := run("hostname")
-		r2 := runSSH(app2, "hostname")
-		sendMessage(chatID, fmt.Sprintf("App1: %s\nApp1→Web1 SSH: %s", r1, r2))
+		r1 := bot.run("hostname")
+		r2 := bot.runSSH(app2, "hostname")
+		bot.send(chatID, fmt.Sprintf("App1: %s\nApp1→Web1 SSH: %s", r1, r2))
 
 	case strings.HasPrefix(text, "/restart"):
 		parts := strings.Fields(text)
@@ -239,22 +257,22 @@ func handleCommand(chatID int64, text string) {
 		}
 		switch svc {
 		case "nginx":
-			r := runSSH(app2, "sudo systemctl restart nginx; systemctl is-active nginx")
-			sendMessage(chatID, "Web1 nginx: "+r)
+			r := bot.runSSH(app2, "sudo systemctl restart nginx; systemctl is-active nginx")
+			bot.send(chatID, "Web1 nginx: "+r)
 		case "pg", "postgresql":
-			r := run("sudo systemctl restart postgresql@16-main 2>&1; systemctl is-active postgresql@16-main")
-			sendMessage(chatID, "PG: "+r)
+			r := bot.run("sudo systemctl restart postgresql@16-main 2>&1; systemctl is-active postgresql@16-main")
+			bot.send(chatID, "PG: "+r)
 		case "lambs":
-			r := run("sudo systemctl restart lambs-server 2>&1; systemctl is-active lambs-server")
-			sendMessage(chatID, "Lambs: "+r)
+			r := bot.run("sudo systemctl restart lambs-server 2>&1; systemctl is-active lambs-server")
+			bot.send(chatID, "Lambs: "+r)
 		case "qa":
-			r := run("sudo systemctl restart lambs-server 2>&1; systemctl is-active lambs-server")
-			sendMessage(chatID, "Lambs (QA managed): "+r)
+			r := bot.run("sudo systemctl restart lambs-server 2>&1; systemctl is-active lambs-server")
+			bot.send(chatID, "Lambs (QA managed): "+r)
 		case "redis":
-			r := run("sudo systemctl restart redis-server 2>&1; systemctl is-active redis-server")
-			sendMessage(chatID, "Redis: "+r)
+			r := bot.run("sudo systemctl restart redis-server 2>&1; systemctl is-active redis-server")
+			bot.send(chatID, "Redis: "+r)
 		default:
-			sendMessage(chatID, "可用: nginx(Web1) | pg lambs redis(App1)")
+			bot.send(chatID, "可用: nginx(Web1) | pg lambs redis(App1)")
 		}
 
 	case strings.HasPrefix(text, "/logs"):
@@ -265,8 +283,12 @@ func handleCommand(chatID int64, text string) {
 				count = n
 			}
 		}
-		sendMessage(chatID, redact(runSSH(app2,
-			fmt.Sprintf("tail -n %d /var/log/nginx/error.log 2>/dev/null || echo no errors", count)))[:3500])
+		logOut := redact(bot.runSSH(app2,
+			fmt.Sprintf("tail -n %d /var/log/nginx/error.log 2>/dev/null || echo no errors", count)))
+		if len(logOut) > 3500 {
+			logOut = logOut[:3500]
+		}
+		bot.send(chatID, logOut)
 
 	case strings.HasPrefix(text, "/dl"):
 		parts := strings.Fields(text)
@@ -274,20 +296,20 @@ func handleCommand(chatID int64, text string) {
 			fid := parts[1]
 			// Validate: TG file IDs are alphanumeric/underscore/dash only
 			if len(fid) < 8 || len(fid) > 128 {
-				sendMessage(chatID, "无效的文件ID")
+				bot.send(chatID, "无效的文件ID")
 			} else if strings.IndexFunc(fid, func(r rune) bool { return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') }) >= 0 {
-				sendMessage(chatID, "无效的文件ID")
+				bot.send(chatID, "无效的文件ID")
 			} else {
-				sendMessage(chatID, run(fmt.Sprintf("/opt/wool-tools/tg-upload.py -d %s -o /tmp/dl-%s 2>&1", fid, fid)))
+				bot.send(chatID, bot.run(fmt.Sprintf("/opt/wool-tools/tg-upload.py -d %s -o /tmp/dl-%s 2>&1", fid, fid)))
 			}
 		} else {
-			sendMessage(chatID, "用法: /dl <文件ID>")
+			bot.send(chatID, "用法: /dl <文件ID>")
 		}
 
 	case strings.HasPrefix(text, "/storage"):
-		raw := run("cat /opt/wool-tools/upload-log.jsonl 2>/dev/null || echo empty")
+		raw := bot.run("cat /opt/wool-tools/upload-log.jsonl 2>/dev/null || echo empty")
 		if raw == "empty" {
-			sendMessage(chatID, "暂无存储文件")
+			bot.send(chatID, "暂无存储文件")
 			return
 		}
 		parts := strings.Fields(text)
@@ -351,10 +373,10 @@ func handleCommand(chatID int64, text string) {
 			}
 		}
 		out += fmt.Sprintf("\ntotal: %d files %s", totalF, fmtSize(totalS))
-		sendMessage(chatID, out[:4000])
+		bot.send(chatID, out[:4000])
 
 	case text == "/stop":
-		sendMessage(chatID, "已休眠，发消息自动唤醒")
+		bot.send(chatID, "已休眠，发消息自动唤醒")
 		setWebhook()
 	}
 }
