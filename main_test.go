@@ -401,8 +401,12 @@ func TestProjectLogsSvcFailure(t *testing.T) {
 		} `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &env)
-	if len(env.Data.Logs) == 0 || !strings.Contains(env.Data.Logs[0], "journalctl") {
-		t.Errorf("logs = %v, want journalctl error text", env.Data.Logs)
+	// Two honest shapes: Windows/no-journalctl → error text; systemd →
+	// "-- No entries --" (journalctl exits 0 for unknown units).
+	if len(env.Data.Logs) == 0 {
+		t.Errorf("logs = empty, want journalctl error or no-entries text")
+	} else if first := env.Data.Logs[0]; !strings.Contains(first, "journalctl") && first != "-- No entries --" {
+		t.Errorf("logs = %v, want journalctl error or no-entries text", env.Data.Logs)
 	}
 	mustExec(`DELETE FROM projects WHERE id='log-svc-proj'`)
 }
