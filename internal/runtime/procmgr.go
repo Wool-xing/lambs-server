@@ -79,7 +79,12 @@ func memAvailableMB() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	return memAvailableFrom(string(data))
+}
+
+// memAvailableFrom parses a meminfo blob (extracted for table-driven tests).
+func memAvailableFrom(data string) (int, error) {
+	for _, line := range strings.Split(data, "\n") {
 		if strings.HasPrefix(line, "MemAvailable:") {
 			f := strings.Fields(line)
 			if len(f) > 1 {
@@ -241,9 +246,13 @@ func readProcStats(pid int) (ticks int64, rssPages int64, startTicks int64) {
 	if err != nil {
 		return 0, 0, 0
 	}
-	// stat format: pid (comm) state ppid ... — fields after comm start at index 3
-	// Split on ')' to skip comm which may contain spaces
-	s := string(data)
+	return parseProcStat(string(data))
+}
+
+// parseProcStat parses /proc/<pid>/stat (extracted for table-driven tests).
+// stat format: pid (comm) state ppid ... — fields after comm start at index 3.
+// Split on ')' to skip comm which may contain spaces.
+func parseProcStat(s string) (ticks int64, rssPages int64, startTicks int64) {
 	idx := strings.LastIndex(s, ")")
 	if idx < 0 || idx+2 >= len(s) {
 		return 0, 0, 0
@@ -276,7 +285,12 @@ func procUptimeSec(startTicks int64) int {
 	if err != nil {
 		return 0
 	}
-	fields := strings.Fields(string(data))
+	return procUptimeFrom(string(data), startTicks)
+}
+
+// procUptimeFrom is the pure math half (extracted for table-driven tests).
+func procUptimeFrom(uptimeData string, startTicks int64) int {
+	fields := strings.Fields(uptimeData)
 	if len(fields) == 0 {
 		return 0
 	}
@@ -325,10 +339,10 @@ func (pm *ProcManager) Status(projectID string) map[string]interface{} {
 	return map[string]interface{}{
 		"running": true, "project_id": projectID,
 		"pid": pid, "port": port,
-		"uptime_sec": uptime,
+		"uptime_sec":  uptime,
 		"cpu_percent": cpuPct,
-		"rss_mb":     int(rssPages * 4 / 1024),
-		"starting":   !started.IsZero() && time.Since(started) < 30*time.Second,
+		"rss_mb":      int(rssPages * 4 / 1024),
+		"starting":    !started.IsZero() && time.Since(started) < 30*time.Second,
 	}
 }
 
