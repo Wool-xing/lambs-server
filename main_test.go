@@ -179,3 +179,61 @@ func TestHealthHandlersDirect(t *testing.T) {
 		t.Errorf("aggregated unauth = %d, want 401", code)
 	}
 }
+
+// TestLocalServicesDegrade — hosts without systemctl (Windows dev) get an
+// empty services list, never a 500.
+func TestLocalServicesDegrade(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleLocalServices(w, r)
+	}))
+	defer ts.Close()
+	resp, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(string(raw), `"services"`) {
+		t.Errorf("local-services = %d %s", resp.StatusCode, raw)
+	}
+}
+
+// TestDetectStartupContract — bad repo 400s, missing dir reports
+// exists:false, a Procfile dir yields candidates (/home/ubuntu/apps is
+// C:\home\ubuntu\apps on Windows — creatable for the test).
+func TestDetectStartupContract(t *testing.T) {
+	// Call the handler directly — the route's sa gate is middleware, not
+	// part of this handler's contract.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleDetectStartup(w, r)
+	}))
+	defer ts.Close()
+
+	post := func(body string) (int, string) {
+		resp, err := http.Post(ts.URL, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+
+	if c, _ := post(`{"repo":"../evil"}`); c != 400 {
+		t.Errorf("bad repo = %d, want 400", c)
+	}
+	if c, b := post(`{"repo":"definitely-missing-proj"}`); c != 200 || !strings.Contains(b, `"exists":false`) {
+		t.Errorf("missing repo = %d %s", c, b)
+	}
+
+	// Procfile candidate detection — /home/ubuntu may be unwritable on
+	// CI runners; degrade honestly instead of failing the suite.
+	if err := os.MkdirAll("/home/ubuntu/apps/detect-probe", 0755); err != nil {
+		t.Skipf("cannot create /home/ubuntu/apps: %v", err)
+	}
+	defer os.RemoveAll("/home/ubuntu/apps/detect-probe")
+	os.WriteFile("/home/ubuntu/apps/detect-probe/Procfile", []byte("web: python main.py\n"), 0644)
+	if c, b := post(`{"repo":"detect-probe"}`); c != 200 || !strings.Contains(b, "python main.py") {
+		t.Errorf("procfile detect = %d %s", c, b)
+	}
+}
