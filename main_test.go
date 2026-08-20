@@ -179,3 +179,21 @@ func TestHealthHandlersDirect(t *testing.T) {
 		t.Errorf("aggregated unauth = %d, want 401", code)
 	}
 }
+
+// TestLocalServicesDegrade — hosts without systemctl (Windows dev) get an
+// empty services list, never a 500.
+func TestLocalServicesDegrade(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleLocalServices(w, r)
+	}))
+	defer ts.Close()
+	resp, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(string(raw), `"services"`) {
+		t.Errorf("local-services = %d %s", resp.StatusCode, raw)
+	}
+}
