@@ -69,9 +69,13 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@latest
           "$(go env GOPATH)/bin/staticcheck" ./...
-      - name: Coverage report
+      - name: Coverage report + regression gate
         run: |
           go test -p 1 -coverprofile=coverage.out ./...
-          TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
-          echo "Total coverage: ${TOTAL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Total coverage: ${TOTAL}"
+          TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          # Gate at the current level: new code must not drag coverage down
+          # (raise the bar as the sprint lands; round-7 calibration item).
+          THRESHOLD=42
+          echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)"
+          awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}" && { echo "coverage regressed below ${THRESHOLD}%"; exit 1; }
