@@ -371,7 +371,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	JSONCreated(w, map[string]interface{}{
 		"access_token": tokenStr,
 		"token_type":   "bearer",
-		"user":         map[string]interface{}{"id": id, "username": req.Username, "name": req.Username, "email": req.Email, "role": "viewer", "status": "active"},
+		"user":         map[string]interface{}{"id": id, "username": req.Username, "name": req.Username, "email": req.Email, "role": role, "status": "active"},
 	})
 }
 
@@ -412,7 +412,14 @@ func HandleMePassword(w http.ResponseWriter, r *http.Request) {
 		JSONErr(w, 500, "密码处理失败")
 		return
 	}
-	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, token_version=COALESCE(token_version,0)+1 WHERE id=$2", string(newHash), userID); err != nil {
+	// 空盐账户（旧数据）改密时生成并写入新盐，否则永远停留在无盐
+	// 路径上 (QA 第 5 轮校准)。
+	if salt == "" {
+		salt = NewSaltHex()
+		newPayload = sha256Hex(req.New + salt)
+		newHash, _ = bcrypt.GenerateFromPassword([]byte(newPayload), bcrypt.DefaultCost)
+	}
+	if _, err := db.DB.Exec("UPDATE users SET password_hash=$1, pwd_salt=$2, token_version=COALESCE(token_version,0)+1 WHERE id=$3", string(newHash), salt, userID); err != nil {
 		log.Printf("ChangePassword: %v", err)
 		JSONErr(w, 500, "重置密码失败")
 		return
