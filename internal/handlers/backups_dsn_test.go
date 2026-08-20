@@ -15,8 +15,8 @@ func TestParsePGDSN(t *testing.T) {
 		dbname   string
 	}{
 		{
-			"postgres://lambs_admin:sekret@10.1.2.3:5433/mydb?sslmode=disable",
-			"lambs_admin", "sekret", "10.1.2.3", "5433", "mydb",
+			"postgres://lambs_admin:pw@10.1.2.3:5433/mydb?sslmode=disable",
+			"lambs_admin", "pw", "10.1.2.3", "5433", "mydb",
 		},
 		{
 			"postgresql://u:pw@db.internal/app",

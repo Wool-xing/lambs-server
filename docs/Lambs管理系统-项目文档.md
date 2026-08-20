@@ -4,7 +4,7 @@
 >
 > 架构：React SPA (`web/`) + Go 单二进制 (`go-server/`) + PostgreSQL
 >
-> 访问：https://wool.cc.cd/lambs/
+> 访问：https://YOUR_DOMAIN/Lambs/
 
 ---
 
