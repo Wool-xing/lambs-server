@@ -3,7 +3,8 @@
 //
 // Build: GOOS=linux GOARCH=amd64 go build -o tg-bot .
 // Deploy: scp tg-bot → App1:/usr/local/bin/tg-bot
-//          sudo systemctl restart tg-bot
+//
+//	sudo systemctl restart tg-bot
 package main
 
 import (
@@ -297,7 +298,9 @@ func handleCommand(chatID int64, text string) {
 			// Validate: TG file IDs are alphanumeric/underscore/dash only
 			if len(fid) < 8 || len(fid) > 128 {
 				bot.send(chatID, "无效的文件ID")
-			} else if strings.IndexFunc(fid, func(r rune) bool { return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') }) >= 0 {
+			} else if strings.IndexFunc(fid, func(r rune) bool {
+				return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-')
+			}) >= 0 {
 				bot.send(chatID, "无效的文件ID")
 			} else {
 				bot.send(chatID, bot.run(fmt.Sprintf("/opt/wool-tools/tg-upload.py -d %s -o /tmp/dl-%s 2>&1", fid, fid)))
@@ -381,13 +384,11 @@ func handleCommand(chatID int64, text string) {
 	}
 }
 
-
 // wakeCh signals the bot to resume polling from sleep mode.
 var wakeCh = make(chan struct{}, 1)
 
-// webhookServer starts an HTTP server on :3601. When TG sends
-// a webhook update (via nginx proxy), it wakes the bot.
-func webhookServer() {
+// webhookHandler returns the HTTP handler for TG webhook wake-ups.
+func webhookHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		received := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
@@ -406,12 +407,53 @@ func webhookServer() {
 		default:
 		}
 	})
+	return mux
+}
+
+// webhookServer starts an HTTP server on :3601. When TG sends
+// a webhook update (via nginx proxy), it wakes the bot.
+func webhookServer() {
 	log.Println("webhook: listening on :3601 (sleep mode)")
 	// Port-in-use must not leave wake-ups silently dead (R5 C6).
-	if err := http.ListenAndServe(":3601", mux); err != nil {
+	if err := http.ListenAndServe(":3601", webhookHandler()); err != nil {
 		log.Fatal("webhook server failed:", err)
 	}
 }
+
+// processUpdates handles one getUpdates result batch: dispatches command
+// messages and returns whether any message was seen plus the latest
+// update_id (advanced even for non-message updates, e.g. edits).
+func processUpdates(updates []interface{}, lastUpdateID int) (hasMsg bool, latest int) {
+	latest = lastUpdateID
+	for _, raw := range updates {
+		u, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if id, ok := u["update_id"].(float64); ok {
+			latest = int(id)
+		}
+		msg, ok := u["message"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		chat, ok := msg["chat"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		chatID, ok := chat["id"].(float64)
+		if !ok {
+			continue
+		}
+		text, _ := msg["text"].(string)
+		if text != "" {
+			handleCommand(int64(chatID), text)
+			hasMsg = true
+		}
+	}
+	return
+}
+
 // ── Polling loop ────────────────────────────────────────
 
 func main() {
@@ -468,43 +510,18 @@ func main() {
 			if time.Since(lastMsgTime) > idleTimeout*time.Second {
 				log.Println("Idle timeout, entering sleep mode")
 				setWebhook()
-					<-wakeCh
-					log.Println("Woke up, resuming polling")
-					deleteWebhook()
-					lastMsgTime = time.Now()
-					continue
-				}
-				time.Sleep(500 * time.Millisecond)
+				<-wakeCh
+				log.Println("Woke up, resuming polling")
+				deleteWebhook()
+				lastMsgTime = time.Now()
 				continue
 			}
-
-			hasMsg := false
-		for _, raw := range updates {
-			u, ok := raw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if id, ok := u["update_id"].(float64); ok {
-				lastUpdateID = int(id)
-			}
-			msg, ok := u["message"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			chat, ok := msg["chat"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			chatID, ok := chat["id"].(float64)
-			if !ok {
-				continue
-			}
-			text, _ := msg["text"].(string)
-			if text != "" {
-				handleCommand(int64(chatID), text)
-				hasMsg = true
-			}
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
+
+		hasMsg, newID := processUpdates(updates, lastUpdateID)
+		lastUpdateID = newID
 		if hasMsg {
 			lastMsgTime = time.Now()
 		}
