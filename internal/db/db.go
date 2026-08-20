@@ -74,7 +74,7 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 	dsn2 := strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
 	dsn2 = strings.Replace(dsn2, "sqlite:///", "", 1)
 	if strings.Contains(dsn, "postgres") {
-		tdb, err := sql.Open("postgres", dsn2+"?connect_timeout=5")
+		tdb, err := sql.Open("postgres", pgWithTimeout(dsn2))
 		if err == nil {
 			err = tdb.Ping()
 			tdb.Close()
@@ -177,6 +177,15 @@ func testDSNInternal(dsn, source string) map[string]interface{} {
 }
 
 // SyncUserData fetches user-like rows from a project's datasource.
+// pgWithTimeout appends connect_timeout without double-? when the DSN
+// already carries query params (sslmode=disable etc).
+func pgWithTimeout(dsn string) string {
+	if strings.Contains(dsn, "?") {
+		return dsn + "&connect_timeout=5"
+	}
+	return dsn + "?connect_timeout=5"
+}
+
 func SyncUserData(dsn string) []map[string]interface{} {
 	if dsn == "" || dsn == "—" {
 		return nil
@@ -188,7 +197,7 @@ func SyncUserData(dsn string) []map[string]interface{} {
 	dsn2 := strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
 	dsn2 = strings.Replace(dsn2, "sqlite:///", "", 1)
 	if strings.Contains(dsn, "postgres") {
-		tdb, err := sql.Open("postgres", dsn2+"?connect_timeout=5")
+		tdb, err := sql.Open("postgres", pgWithTimeout(dsn2))
 		if err != nil {
 			return nil
 		}
@@ -341,7 +350,7 @@ func SyncUserCount(dsn string) int {
 	dsn2 := strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
 	dsn2 = strings.Replace(dsn2, "sqlite:///", "", 1)
 	if strings.Contains(dsn, "postgres") {
-		tdb, err := sql.Open("postgres", dsn2+"?connect_timeout=5")
+		tdb, err := sql.Open("postgres", pgWithTimeout(dsn2))
 		if err != nil {
 			return 0
 		}

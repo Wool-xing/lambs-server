@@ -237,3 +237,43 @@ func TestDetectStartupContract(t *testing.T) {
 		t.Errorf("procfile detect = %d %s", c, b)
 	}
 }
+
+// TestAggregatedLogsNonSAEmpty — a viewer with no project access gets an
+// empty log list fast (their own audit rows query only runs with access).
+func TestAggregatedLogsNonSAEmpty(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE EXTENSION IF NOT EXISTS pgcrypto`)
+	mustExec(`DROP TABLE IF EXISTS users CASCADE`)
+	mustExec(`CREATE TABLE users (id UUID PRIMARY KEY, username TEXT UNIQUE, name TEXT, email TEXT UNIQUE, password_hash TEXT, role TEXT DEFAULT 'viewer', status TEXT DEFAULT 'active', token_version INT DEFAULT 0, pwd_salt TEXT DEFAULT '', project_access JSONB NOT NULL DEFAULT '[]', avatar_url TEXT DEFAULT '', avatar_thumb TEXT DEFAULT '', last_login TIMESTAMPTZ DEFAULT now(), created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`INSERT INTO users (id, username, name, email, password_hash, role, project_access) VALUES (gen_random_uuid(),'noview','无权限','nv@t.c','x','viewer','[]')`)
+	var uid string
+	db.DB.QueryRow("SELECT id::text FROM users WHERE username='noview'").Scan(&uid)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleAggregatedLogs(w, r)
+	}))
+	defer ts.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"?lines=10", nil)
+	req.Header.Set("X-User-ID", uid)
+	req.Header.Set("X-Role", "viewer")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(string(raw), "data") {
+		t.Errorf("aggregated = %d %s", resp.StatusCode, raw)
+	}
+}
