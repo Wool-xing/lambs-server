@@ -348,3 +348,67 @@ func TestReorderProjects(t *testing.T) {
 	}
 	mustExec(`DELETE FROM projects WHERE id IN ('ro-a','ro-b','ro-c')`)
 }
+
+// TestTaskUpdateDelete — 400 bad payload, 404 unknown id, update lands,
+// delete removes (scheduled_tasks fixture).
+func TestTaskUpdateDelete(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+		cron TEXT NOT NULL, command TEXT NOT NULL, host TEXT NOT NULL DEFAULT 'app1',
+		enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_run_at TIMESTAMPTZ, last_status TEXT NOT NULL DEFAULT '', last_log TEXT NOT NULL DEFAULT '')`)
+	mustExec(`DELETE FROM scheduled_tasks WHERE id='tu-task'`)
+	mustExec(`INSERT INTO scheduled_tasks (id, project_id, name, cron, command, host, enabled)
+		VALUES ('tu-task','proj-x','任务','*/5 * * * *','echo hi','app1',true)`)
+
+	call := func(method, id, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/api/tasks/"+id, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.SetPathValue("id", id)
+		w := httptest.NewRecorder()
+		if method == "PUT" {
+			UpdateTask(w, r)
+		} else {
+			DeleteTask(w, r)
+		}
+		return w
+	}
+
+	// Bad payload → 400.
+	if w := call("PUT", "tu-task", "{not-json"); w.Code != 400 {
+		t.Errorf("bad payload = %d, want 400", w.Code)
+	}
+	// Unknown id → 404.
+	if w := call("PUT", "no-such", `{"name":"x","cron":"* * * * *","command":"echo"}`); w.Code != 404 {
+		t.Errorf("unknown update = %d, want 404", w.Code)
+	}
+	// Update lands.
+	if w := call("PUT", "tu-task", `{"name":"改后","cron":"0 0 * * *","command":"echo new","enabled":false}`); w.Code != 200 {
+		t.Fatalf("update = %d (%s)", w.Code, w.Body.String())
+	}
+	var name, cron, cmd string
+	var enabled bool
+	db.DB.QueryRow("SELECT name, cron, command, enabled FROM scheduled_tasks WHERE id='tu-task'").Scan(&name, &cron, &cmd, &enabled)
+	if name != "改后" || cron != "0 0 * * *" || cmd != "echo new" || enabled {
+		t.Errorf("update did not land: %q %q %q %v", name, cron, cmd, enabled)
+	}
+	// Delete removes; second delete 404s.
+	if w := call("DELETE", "tu-task", ""); w.Code != 200 {
+		t.Fatalf("delete = %d", w.Code)
+	}
+	if w := call("DELETE", "tu-task", ""); w.Code != 404 {
+		t.Errorf("re-delete = %d, want 404", w.Code)
+	}
+}

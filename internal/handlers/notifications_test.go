@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -78,5 +79,117 @@ func TestListNotificationsUnreadCount(t *testing.T) {
 				t.Errorf("total = %d, want %d (body %s)", body.Data.Total, c.wantTotal, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestNotificationTouchHandlers — read/delete single rows with the access
+// gate; ReadAll covers the three branches (super_admin / hasAll / scoped).
+func TestNotificationTouchHandlers(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS notifications; DROP TABLE IF EXISTS users;`)
+	mustExec(`CREATE TABLE users (id TEXT PRIMARY KEY, project_access JSONB NOT NULL DEFAULT '[]')`)
+	mustExec(`CREATE TABLE notifications (id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT, content TEXT NOT NULL DEFAULT '', is_read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMP NOT NULL DEFAULT now())`)
+	mustExec(`INSERT INTO users (id, project_access) VALUES ('u-app', '["app"]'), ('u-all', '["all"]')`)
+	mustExec(`INSERT INTO notifications (id, project_id, type, title, is_read) VALUES
+		('t1', 'app', 'info', 'own', false),
+		('t2', 'other', 'info', 'foreign', false),
+		('t3', NULL, 'info', 'global', false)`)
+
+	req := func(method, uid, role, path string) (*httptest.ResponseRecorder, *http.Request) {
+		r := httptest.NewRequest(method, path, nil)
+		r.Header.Set("X-User-ID", uid)
+		r.Header.Set("X-Role", role)
+		w := httptest.NewRecorder()
+		return w, r
+	}
+
+	// 403: u-app cannot read the foreign notification.
+	{
+		w, r := req("POST", "u-app", "viewer", "/api/notifications/t2/read")
+		ReadNotification(w, r, "t2")
+		if w.Code != 403 {
+			t.Errorf("foreign read = %d, want 403", w.Code)
+		}
+	}
+
+	// Own row: read flips is_read.
+	{
+		w, r := req("POST", "u-app", "viewer", "/api/notifications/t1/read")
+		ReadNotification(w, r, "t1")
+		if w.Code != 200 {
+			t.Fatalf("own read = %d", w.Code)
+		}
+		var r1 bool
+		db.DB.QueryRow("SELECT is_read FROM notifications WHERE id='t1'").Scan(&r1)
+		if !r1 {
+			t.Error("is_read not flipped for own row")
+		}
+	}
+
+	// Delete own row.
+	{
+		w, r := req("DELETE", "u-app", "viewer", "/api/notifications/t1")
+		DeleteNotification(w, r, "t1")
+		if w.Code != 200 {
+			t.Fatalf("own delete = %d", w.Code)
+		}
+		var n int
+		db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE id='t1'").Scan(&n)
+		if n != 0 {
+			t.Error("row survived delete")
+		}
+	}
+
+	// Scoped user reads all: only own + global rows flip, foreign stays.
+	{
+		w, r := req("POST", "u-app", "viewer", "/api/notifications/read-all")
+		ReadAllNotifications(w, r)
+		if w.Code != 200 {
+			t.Fatalf("read-all = %d", w.Code)
+		}
+		var foreignRead bool
+		db.DB.QueryRow("SELECT is_read FROM notifications WHERE id='t2'").Scan(&foreignRead)
+		if foreignRead {
+			t.Error("scoped read-all flipped a foreign row")
+		}
+		var globalRead bool
+		db.DB.QueryRow("SELECT is_read FROM notifications WHERE id='t3'").Scan(&globalRead)
+		if !globalRead {
+			t.Error("scoped read-all did not flip the global row")
+		}
+	}
+
+	// hasAll user flips everything, including foreign rows.
+	{
+		w, r := req("POST", "u-all", "viewer", "/api/notifications/read-all")
+		ReadAllNotifications(w, r)
+		if w.Code != 200 {
+			t.Fatalf("read-all-all = %d", w.Code)
+		}
+		var foreignRead bool
+		db.DB.QueryRow("SELECT is_read FROM notifications WHERE id='t2'").Scan(&foreignRead)
+		if !foreignRead {
+			t.Error("hasAll read-all did not flip the foreign row")
+		}
+	}
+
+	// super_admin branch: flips everything too.
+	{
+		w, r := req("POST", "", "super_admin", "/api/notifications/read-all")
+		ReadAllNotifications(w, r)
+		if w.Code != 200 {
+			t.Fatalf("read-all-sa = %d", w.Code)
+		}
 	}
 }
