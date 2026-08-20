@@ -30,14 +30,27 @@ func TestRedact(t *testing.T) {
 
 func TestFmtSize(t *testing.T) {
 	cases := map[int64]string{
-		0:           "0B",
-		1023:        "1023B",
-		2048:        "2.0KB",
+		0:               "0B",
+		1023:            "1023B",
+		2048:            "2.0KB",
 		5 * 1024 * 1024: "5.0MB",
 	}
 	for in, want := range cases {
 		if got := fmtSize(in); got != want {
 			t.Errorf("fmtSize(%d) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestRedactEmptyConfig — the empty-config regression guard: with token and
+// IPs unset, redact must pass text through untouched (the old ReplaceAll
+// with "" inserted a [IP] marker between EVERY character).
+func TestRedactEmptyConfig(t *testing.T) {
+	oldApp1, oldApp2, oldToken := app1, app2, token
+	app1, app2, token = "", "", ""
+	defer func() { app1, app2, token = oldApp1, oldApp2, oldToken }()
+	in := "plain text 10.0.0.9"
+	if got := redact(in); got != in {
+		t.Errorf("redact(%q) = %q, want untouched", in, got)
 	}
 }

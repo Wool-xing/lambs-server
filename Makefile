@@ -3,7 +3,13 @@
 # share one test database (running parallel makes cross-package fixtures
 # collide and full-suite runs fail spuriously).
 
-.PHONY: test test-db vet build race
+.PHONY: test test-db vet build race check-routes
+
+# Route→test diff (audit tool, not a CI gate): lists handlers whose names
+# appear in no _test.go. E2E-mux-only coverage shows up here too — review
+# the list by hand before treating an entry as a real gap.
+check-routes:
+	bash scripts/route-coverage.sh
 
 test:
 	go test -p 1 ./...
