@@ -33,7 +33,7 @@ func CreateBackup(w http.ResponseWriter, r *http.Request, id string) {
 
 func ListBackups(w http.ResponseWriter, r *http.Request, id string) {
 	if !CheckProjectAccess(r, id) { auth.JSONErr(w, 403, "需要项目管理员权限"); return }
-	dir := "/home/ubuntu/lambs-backups"
+	dir := backupBaseDir
 	entries, _ := os.ReadDir(dir)
 	files := []map[string]interface{}{}
 	for _, e := range entries {
@@ -58,6 +58,34 @@ var backupBaseDir = func() string {
 	}
 	return "/home/ubuntu/lambs-backups"
 }()
+
+// parsePGDSN splits a postgres-family DSN into pg_dump arguments. All
+// three URL schemes are accepted; "postgres://" was previously untrimmed,
+// which corrupted the password into "//xxx" and broke pg_dump auth
+// (QA round 5 CI caught it).
+func parsePGDSN(dsn string) (user, password, host, port, dbname string) {
+	parts := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(dsn, "postgresql+asyncpg://"), "postgresql://"), "postgres://")
+	parts = strings.Split(parts, "?")[0]
+	user, host, port, dbname = "lambs_admin", "127.0.0.1", "5433", "lambs"
+	authPart := strings.Split(parts, "@")[0]
+	if len(strings.Split(parts, "@")) > 1 {
+		user = strings.Split(authPart, ":")[0]
+		hostPart := strings.Split(strings.Split(parts, "@")[1], "/")[0]
+		if strings.Contains(hostPart, ":") {
+			hp := strings.Split(hostPart, ":")
+			host, port = hp[0], hp[1]
+		} else {
+			host = hostPart
+		}
+	}
+	if len(strings.Split(parts, "/")) > 1 {
+		dbname = strings.Split(strings.Split(parts, "/")[len(strings.Split(parts, "/"))-1], "?")[0]
+	}
+	if strings.Contains(authPart, ":") {
+		password = strings.Split(authPart, ":")[1]
+	}
+	return
+}
 
 func safeBackupPath(id, filename string) (string, error) {
 	baseDir := backupBaseDir
@@ -130,7 +158,7 @@ func UploadBackupToTG(w http.ResponseWriter, r *http.Request, id, file string) {
 func doBackup(projectID, dsn string) map[string]interface{} {
 	ts := time.Now().Format("20060102-150405")
 	fname := fmt.Sprintf("%s_%s", projectID, ts)
-	dir := "/home/ubuntu/lambs-backups"
+	dir := backupBaseDir
 	os.MkdirAll(dir, 0755)
 	if strings.Contains(dsn, "sqlite") {
 		fpath := fmt.Sprintf("%s/%s.db", dir, fname)
@@ -149,17 +177,7 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 	}
 	if strings.Contains(dsn, "postgresql") || strings.Contains(dsn, "postgres") {
 		fpath := fmt.Sprintf("%s/%s.sql", dir, fname)
-		parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(dsn, "postgresql://"), "postgresql+asyncpg://"), "?")[0]
-		user, host, port, dbname := "lambs_admin", "127.0.0.1", "5433", "lambs"
-		authPart := strings.Split(parts, "@")[0]
-		if len(strings.Split(parts, "@")) > 1 {
-			user = strings.Split(authPart, ":")[0]
-			hostPart := strings.Split(strings.Split(parts, "@")[1], "/")[0]
-			if strings.Contains(hostPart, ":") { hp := strings.Split(hostPart, ":"); host, port = hp[0], hp[1] } else { host = hostPart }
-		}
-		if len(strings.Split(parts, "/")) > 1 { dbname = strings.Split(strings.Split(parts, "/")[len(strings.Split(parts, "/"))-1], "?")[0] }
-		password := ""
-		if strings.Contains(authPart, ":") { password = strings.Split(authPart, ":")[1] }
+		user, password, host, port, dbname := parsePGDSN(dsn)
 		cmd := exec.Command("pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname, "-f", fpath, "--no-owner", "--no-acl")
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
 		out, err := cmd.CombinedOutput()
@@ -176,7 +194,7 @@ func RunScheduledBackups() {
 	rows, err := db.DB.Query("SELECT id, COALESCE(dsn,''), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE backup_interval_hours > 0")
 	if err != nil { return }
 	defer rows.Close()
-	dir := "/home/ubuntu/lambs-backups"
+	dir := backupBaseDir
 	for rows.Next() {
 		var pid, dsn string
 		var intervalHours, retentionDays int
