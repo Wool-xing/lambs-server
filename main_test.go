@@ -468,3 +468,62 @@ func TestProjectLogsTailFile(t *testing.T) {
 	}
 	mustExec(`DELETE FROM projects WHERE id='log-tail-proj'`)
 }
+
+// TestSystemHealthShape — direct handler contract: 200 with every field
+// present (Windows: /proc reads fail → zero values, shape must still hold).
+func TestSystemHealthShape(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/system/health", nil)
+	w := httptest.NewRecorder()
+	handleSystemHealth(w, r)
+	if w.Code != 200 {
+		t.Fatalf("code = %d", w.Code)
+	}
+	var body struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, k := range []string{"hostname", "cpu_percent", "memory_used_mb", "memory_total_mb", "disk_used_gb", "disk_total_gb", "uptime_seconds", "nodes"} {
+		if _, ok := body.Data[k]; !ok {
+			t.Errorf("missing field %q in %v", k, body.Data)
+		}
+	}
+}
+
+// TestAggregatedLogsSA — the admin branch reads the full audit trail and
+// returns rows (non-SA fast path covered since round 9).
+func TestAggregatedLogsSA(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS audit_logs (id SERIAL PRIMARY KEY, user_id TEXT, user_name TEXT, action TEXT, target TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ('admin','管理员','登录','Lambs','登录成功')`)
+
+	r := httptest.NewRequest("GET", "/api/logs/aggregated", nil)
+	r.Header.Set("X-Role", "super_admin")
+	r.Header.Set("X-User-ID", "admin")
+	w := httptest.NewRecorder()
+	handleAggregatedLogs(w, r)
+	if w.Code != 200 {
+		t.Fatalf("code = %d", w.Code)
+	}
+	var body struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.Data) == 0 {
+		t.Error("admin aggregated logs empty")
+	}
+}
