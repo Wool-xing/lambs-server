@@ -46,7 +46,7 @@ func TestRealBackendSmoke(t *testing.T) {
 	mustExec(`CREATE TABLE audit_logs (id SERIAL PRIMARY KEY, user_id TEXT, user_name TEXT, action TEXT, target TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`)
 	mustExec(`CREATE TABLE notifications (id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT, content TEXT NOT NULL DEFAULT '', is_read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMP NOT NULL DEFAULT now())`)
 	mustExec(`CREATE TABLE projects (
-		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT,
+		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT,
 		stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0,
 		status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false,
 		icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT,
@@ -108,13 +108,23 @@ func TestRealBackendSmoke(t *testing.T) {
 		t.Errorf("me username = %v, want e2e_smoke", u)
 	}
 
-	// 3. /api/projects — contract must still match the handler's column list.
+	// 3. First-user onboarding chain: the registered super_admin can create
+	// a project immediately (the round-4 dead-end regression guard).
+	code, body = do("POST", "/api/projects", token, map[string]interface{}{
+		"name": "冒烟项目", "repo": "smoke-proj", "db_type": "SQLite",
+		"dsn": "sqlite:///" + t.TempDir() + "/smoke.db", "port": "", "status": "online",
+	})
+	if code != 200 && code != 201 {
+		t.Fatalf("first-user create project = %d (%v)", code, body)
+	}
+
+	// 4. /api/projects — contract must still match the handler's column list.
 	code, body = do("GET", "/api/projects", token, nil)
 	if code != 200 {
 		t.Fatalf("projects = %d (%v)", code, body)
 	}
 
-	// 4. /api/notifications — unread_count contract (the field QA round 2 fixed).
+	// 5. /api/notifications — unread_count contract (the field QA round 2 fixed).
 	code, body = do("GET", "/api/notifications", token, nil)
 	if code != 200 {
 		t.Fatalf("notifications = %d (%v)", code, body)
@@ -123,11 +133,11 @@ func TestRealBackendSmoke(t *testing.T) {
 		t.Errorf("notifications response missing unread_count: %v", nd)
 	}
 
-	// 5. /api/health — public contract.
+	// 6. /api/health — public contract.
 	code, body = do("GET", "/api/health", "", nil)
 	if code != 200 || body["data"].(map[string]interface{})["status"] != "ok" {
 		t.Fatalf("health = %d (%v)", code, body)
 	}
 
-	fmt.Println("smoke ok: register → me → projects → notifications → health")
+	fmt.Println("smoke ok: register → me → create-project → projects → notifications → health")
 }
