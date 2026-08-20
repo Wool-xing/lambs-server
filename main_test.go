@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -409,4 +410,61 @@ func TestProjectLogsSvcFailure(t *testing.T) {
 		t.Errorf("logs = %v, want journalctl error or no-entries text", env.Data.Logs)
 	}
 	mustExec(`DELETE FROM projects WHERE id='log-svc-proj'`)
+}
+
+// TestProjectLogsTailFile — the runtime-managed tail path: an existing log
+// file is returned last-N-lines; the lines param clamps to 50.
+func TestProjectLogsTailFile(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, service_name TEXT)`)
+	mustExec(`DELETE FROM projects WHERE id='log-tail-proj'`)
+	mustExec(`INSERT INTO projects (id, name, service_name) VALUES ('log-tail-proj','无服务','')`)
+
+	dir := t.TempDir()
+	old := projectLogDir
+	projectLogDir = dir
+	defer func() { projectLogDir = old }()
+	if err := os.WriteFile(filepath.Join(dir, "log-tail-proj.log"),
+		[]byte("line1\nline2\nline3\nline4\nline5\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	call := func(lines string) []string {
+		r := httptest.NewRequest("GET", "/api/projects/log-tail-proj/logs?lines="+lines, nil)
+		r.Header.Set("X-Role", "super_admin")
+		w := httptest.NewRecorder()
+		handleProjectLogs(w, r, "log-tail-proj")
+		if w.Code != 200 {
+			t.Fatalf("code = %d, want 200", w.Code)
+		}
+		var env struct {
+			Data struct {
+				Logs []string `json:"logs"`
+			} `json:"data"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &env)
+		return env.Data.Logs
+	}
+
+	// lines=2 → last 2 lines only.
+	got := call("2")
+	if len(got) != 2 || got[0] != "line4" || got[1] != "line5" {
+		t.Errorf("tail 2 = %v, want [line4 line5]", got)
+	}
+	// lines=999 clamps to 50 → all 5 lines returned.
+	if got := call("999"); len(got) != 5 {
+		t.Errorf("clamped tail = %d lines, want 5", len(got))
+	}
+	mustExec(`DELETE FROM projects WHERE id='log-tail-proj'`)
 }

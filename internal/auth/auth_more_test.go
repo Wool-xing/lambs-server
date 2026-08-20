@@ -129,9 +129,8 @@ func TestCodeMACAndRandomCode(t *testing.T) {
 	if a == "" || a == b || len(a) != 64 {
 		t.Errorf("codeMAC outputs = %q %q", a, b)
 	}
-	if codeMAC("x") == codeMAC("x") {
-		// deterministic per code
-	} else {
+	m1, m2 := codeMAC("x"), codeMAC("x")
+	if m1 != m2 {
 		t.Error("codeMAC not deterministic")
 	}
 	c1, err := randomCode()

@@ -152,13 +152,18 @@ func (tp *TCPProxy) serve(projectID string, ln net.Listener, backend string, cou
 			atomic.AddInt64(counter, 1)
 			defer atomic.AddInt64(counter, -1)
 			ProcMgr.Start(projectID)
-				var backendConn net.Conn
-				for i := 0; i < 60; i++ {
-					conn, err := net.DialTimeout("tcp", backend, 500*time.Millisecond)
-					if err == nil { backendConn = conn; break }
-					time.Sleep(500 * time.Millisecond)
+			var backendConn net.Conn
+			for i := 0; i < 60; i++ {
+				conn, err := net.DialTimeout("tcp", backend, 500*time.Millisecond)
+				if err == nil {
+					backendConn = conn
+					break
 				}
-				if backendConn == nil { return }
+				time.Sleep(500 * time.Millisecond)
+			}
+			if backendConn == nil {
+				return
+			}
 			defer backendConn.Close()
 			done := make(chan struct{}, 2)
 			go func() { io.Copy(backendConn, client); done <- struct{}{} }()
@@ -175,9 +180,7 @@ func (tp *TCPProxy) Stop(projectID string) {
 		ln.Close()
 		delete(tp.listeners, projectID)
 	}
-	if _, ok := tp.actives[projectID]; ok {
-		delete(tp.actives, projectID)
-	}
+	delete(tp.actives, projectID)
 	log.Printf("tcp-proxy: %s stopped", projectID)
 }
 

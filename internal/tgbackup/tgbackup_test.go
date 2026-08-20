@@ -38,7 +38,7 @@ TG_IGNORED=zzz
 	resetSecrets()
 	loadSecrets()
 	if secrets.token != "123:abc" || secrets.backup != "-100123" || secrets.gpg != "secret pass" {
-		t.Errorf("secrets = %+v", secrets)
+		t.Errorf("secrets = %q %q %q", secrets.token, secrets.backup, secrets.gpg)
 	}
 }
 
@@ -47,7 +47,7 @@ func TestLoadSecretsUnsetPath(t *testing.T) {
 	resetSecrets()
 	loadSecrets()
 	if secrets.token != "" || secrets.backup != "" || secrets.gpg != "" {
-		t.Errorf("secrets should be empty without TG_SECRETS_PATH: %+v", secrets)
+		t.Errorf("secrets should be empty without TG_SECRETS_PATH: %q %q %q", secrets.token, secrets.backup, secrets.gpg)
 	}
 }
 
