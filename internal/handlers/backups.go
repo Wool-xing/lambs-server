@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"bytes"
+	"context"
+	"net/url"
 	"fmt"
 	"log"
 	"net/http"
@@ -64,25 +66,27 @@ var backupBaseDir = func() string {
 // which corrupted the password into "//xxx" and broke pg_dump auth
 // (QA round 5 CI caught it).
 func parsePGDSN(dsn string) (user, password, host, port, dbname string) {
-	parts := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(dsn, "postgresql+asyncpg://"), "postgresql://"), "postgres://")
-	parts = strings.Split(parts, "?")[0]
 	user, host, port, dbname = "lambs_admin", "127.0.0.1", "5433", "lambs"
-	authPart := strings.Split(parts, "@")[0]
-	if len(strings.Split(parts, "@")) > 1 {
-		user = strings.Split(authPart, ":")[0]
-		hostPart := strings.Split(strings.Split(parts, "@")[1], "/")[0]
-		if strings.Contains(hostPart, ":") {
-			hp := strings.Split(hostPart, ":")
-			host, port = hp[0], hp[1]
-		} else {
-			host = hostPart
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(dsn, "postgresql+asyncpg://"), "postgresql://"), "postgres://")
+	// URL 解析处理 % 编码与密码内特殊字符 — 手切字符串会拆错 (QA 第 6 轮校准)。
+	u, err := url.Parse("postgres://" + trimmed) // scheme needed for host/user parsing
+	if err != nil {
+		return
+	}
+	if u.User != nil {
+		user = u.User.Username()
+		if pw, ok := u.User.Password(); ok {
+			password = pw
 		}
 	}
-	if len(strings.Split(parts, "/")) > 1 {
-		dbname = strings.Split(strings.Split(parts, "/")[len(strings.Split(parts, "/"))-1], "?")[0]
+	if u.Hostname() != "" {
+		host = u.Hostname()
 	}
-	if strings.Contains(authPart, ":") {
-		password = strings.Split(authPart, ":")[1]
+	if p := u.Port(); p != "" {
+		port = p
+	}
+	if name := strings.TrimPrefix(u.Path, "/"); name != "" {
+		dbname = name
 	}
 	return
 }
@@ -159,12 +163,15 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 	ts := time.Now().Format("20060102-150405")
 	fname := fmt.Sprintf("%s_%s", projectID, ts)
 	dir := backupBaseDir
-	os.MkdirAll(dir, 0755)
+	// 备份含生产数据 — 目录 0700、文件 0600 (QA 第 6 轮校准)。
+	os.MkdirAll(dir, 0700)
 	if strings.Contains(dsn, "sqlite") {
 		fpath := fmt.Sprintf("%s/%s.db", dir, fname)
 		path := strings.Replace(strings.Split(dsn, "?")[0], "sqlite:///", "", 1)
 		// Use SQLite's online backup API for a consistent snapshot even while the app writes
-		cmd := exec.Command("sqlite3", path, fmt.Sprintf(".backup '%s'", fpath))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "sqlite3", path, fmt.Sprintf(".backup '%s'", fpath))
 		var errBuf bytes.Buffer
 		cmd.Stderr = &errBuf
 		if err := cmd.Run(); err != nil {
@@ -173,17 +180,21 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 		}
 		info, err := os.Stat(fpath)
 		if err != nil { log.Printf("backup stat: %v", err); return map[string]interface{}{"ok": false, "error": "备份失败"} }
+		os.Chmod(fpath, 0600)
 		return map[string]interface{}{"ok": true, "filename": fname + ".db", "size_mb": float64(info.Size()) / (1024 * 1024)}
 	}
 	if strings.Contains(dsn, "postgresql") || strings.Contains(dsn, "postgres") {
 		fpath := fmt.Sprintf("%s/%s.sql", dir, fname)
 		user, password, host, port, dbname := parsePGDSN(dsn)
-		cmd := exec.Command("pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname, "-f", fpath, "--no-owner", "--no-acl")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname, "-f", fpath, "--no-owner", "--no-acl")
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
 		out, err := cmd.CombinedOutput()
 		if err != nil { log.Printf("pg_dump: %s %v", string(out), err); return map[string]interface{}{"ok": false, "error": "备份执行失败"} }
 		info, err := os.Stat(fpath)
 		if err != nil { log.Printf("pg_dump stat: %v", err); return map[string]interface{}{"ok": false, "error": "备份文件缺失"} }
+		os.Chmod(fpath, 0600)
 		return map[string]interface{}{"ok": true, "filename": fname + ".sql", "size_mb": float64(info.Size()) / (1024 * 1024)}
 	}
 	return map[string]interface{}{"ok": false, "error": "unsupported db type"}
