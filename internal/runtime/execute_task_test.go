@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	"lambs-server-go/internal/db"
 )
@@ -61,4 +62,49 @@ func TestExecuteTaskFailureNotifies(t *testing.T) {
 	if n != 1 {
 		t.Errorf("notifications after success = %d, want still 1", n)
 	}
+}
+
+// TestStartTaskRunAsync — a stored task runs asynchronously and lands
+// last_status=success (real bash echo). Unknown id errors.
+func TestStartTaskRunAsync(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not present")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+		cron TEXT NOT NULL, command TEXT NOT NULL, host TEXT NOT NULL DEFAULT 'app1',
+		enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_run_at TIMESTAMPTZ, last_status TEXT NOT NULL DEFAULT '', last_log TEXT NOT NULL DEFAULT '')`)
+	mustExec(`DELETE FROM scheduled_tasks WHERE id='t-async'`)
+	mustExec(`INSERT INTO scheduled_tasks (id, project_id, name, cron, command, host) VALUES ('t-async','proj-x','异步任务','*/5 * * * *','echo async-ok','app1')`)
+
+	if err := StartTaskRun("t-async"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := StartTaskRun("nope"); err == nil {
+		t.Error("unknown task id should error")
+	}
+	// Async: poll for the status to land.
+	deadline := time.Now().Add(10 * time.Second)
+	var status string
+	for time.Now().Before(deadline) {
+		db.DB.QueryRow("SELECT last_status FROM scheduled_tasks WHERE id='t-async'").Scan(&status)
+		if status == "success" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Errorf("last_status = %q, want success", status)
 }
