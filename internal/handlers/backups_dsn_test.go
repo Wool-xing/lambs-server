@@ -15,8 +15,8 @@ func TestParsePGDSN(t *testing.T) {
 		dbname   string
 	}{
 		{
-			"postgres://lambs_admin:sekret@10.1.2.3:5433/mydb?sslmode=disable",
-			"lambs_admin", "sekret", "10.1.2.3", "5433", "mydb",
+			"postgres://lambs_admin:pw@10.1.2.3:5433/mydb?sslmode=disable",
+			"lambs_admin", "pw", "10.1.2.3", "5433", "mydb",
 		},
 		{
 			"postgresql://u:pw@db.internal/app",
@@ -30,6 +30,11 @@ func TestParsePGDSN(t *testing.T) {
 			// No auth section: defaults kick in.
 			"postgres://127.0.0.1/db",
 			"lambs_admin", "", "127.0.0.1", "5433", "db",
+		},
+		{
+			// URL-encoded password with special chars survives (calibration P1).
+			"postgres://u:p%40ss%3Aw@h:5433/db",
+			"u", "p@ss:w", "h", "5433", "db",
 		},
 	}
 	for _, c := range cases {
