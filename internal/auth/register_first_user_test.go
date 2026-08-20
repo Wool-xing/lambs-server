@@ -78,3 +78,49 @@ func TestFirstUserBecomesSuperAdmin(t *testing.T) {
 	// Restore the unit-test invariant (db.DB nil for the claims path).
 	db.DB = nil
 }
+
+// TestRegisterGateClosed — LAMBS_ALLOW_REGISTER=false must 403 and persist
+// nothing (QA round 5 idea 1: the gate only had an open-path test).
+func TestRegisterGateClosed(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE EXTENSION IF NOT EXISTS pgcrypto`)
+	mustExec(`DROP TABLE IF EXISTS users CASCADE`)
+	mustExec(`CREATE TABLE users (
+		id UUID PRIMARY KEY, username TEXT UNIQUE, name TEXT, email TEXT UNIQUE,
+		password_hash TEXT, role TEXT DEFAULT 'viewer', status TEXT DEFAULT 'active',
+		token_version INT DEFAULT 0, pwd_salt TEXT DEFAULT '',
+		project_access JSONB NOT NULL DEFAULT '[]',
+		avatar_url TEXT DEFAULT '', avatar_thumb TEXT DEFAULT '',
+		last_login TIMESTAMPTZ DEFAULT now(),
+		created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`CREATE TABLE IF NOT EXISTS audit_logs (id SERIAL PRIMARY KEY, user_id TEXT, user_name TEXT, action TEXT, target TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`)
+
+	os.Setenv("LAMBS_ALLOW_REGISTER", "false")
+	defer os.Unsetenv("LAMBS_ALLOW_REGISTER")
+
+	b, _ := json.Marshal(map[string]string{"username": "gated", "email": "gated@t.c", "password": "secret123"})
+	r := httptest.NewRequest("POST", "/api/auth/register", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	HandleRegister(w, r)
+	if w.Code != 403 {
+		t.Errorf("gated register = %d, want 403 (body %s)", w.Code, w.Body.String())
+	}
+	var n int
+	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='gated'").Scan(&n)
+	if n != 0 {
+		t.Error("gated register persisted a row")
+	}
+	db.DB = nil // restore unit-test invariant
+}
