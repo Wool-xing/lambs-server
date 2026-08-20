@@ -106,3 +106,48 @@ func TestDatasourcesAndAuditLogs(t *testing.T) {
 		t.Errorf("csv missing row: %s", ew.Body.String()[:200])
 	}
 }
+
+// TestExportUsersCSV — real PostgreSQL: CSV header + rows + text/csv type
+// (QA round 6 idea 2: the users export was untested).
+func TestExportUsersCSV(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE EXTENSION IF NOT EXISTS pgcrypto`)
+	mustExec(`DROP TABLE IF EXISTS users CASCADE`)
+	mustExec(`CREATE TABLE users (
+		id UUID PRIMARY KEY, username TEXT UNIQUE, name TEXT, email TEXT UNIQUE,
+		password_hash TEXT, role TEXT DEFAULT 'viewer', status TEXT DEFAULT 'active',
+		token_version INT DEFAULT 0, pwd_salt TEXT DEFAULT '',
+		project_access JSONB NOT NULL DEFAULT '[]',
+		avatar_url TEXT DEFAULT '', avatar_thumb TEXT DEFAULT '',
+		last_login TIMESTAMPTZ DEFAULT now(),
+		created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`INSERT INTO users (id, username, name, email, password_hash, role, status)
+		VALUES (gen_random_uuid(),'exporter','导出用户','exp@t.c','x','viewer','active')`)
+
+	r := httptest.NewRequest("GET", "/api/settings/export/users", nil)
+	r.Header.Set("X-User-ID", "admin")
+	r.Header.Set("X-Role", "super_admin")
+	w := httptest.NewRecorder()
+	ExportUsers(w, r)
+	if w.Code != 200 {
+		t.Fatalf("export users = %d (body %s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/csv") {
+		t.Errorf("content-type = %q", ct)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "exporter") || !strings.Contains(body, "exp@t.c") {
+		t.Errorf("csv missing user row: %s", body[:200])
+	}
+}

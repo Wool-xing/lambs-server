@@ -27,13 +27,13 @@ class TestIPAllowed(unittest.TestCase):
     def test_other_cgnat_denied(self):
         # 100.64.0.0/10 was narrowed to app1's Tailscale IP — carrier-grade
         # NAT neighbors in the same /10 must no longer reach the agent.
-        self.assertFalse(compute_agent.ip_allowed("100.101.0.5"))
+        self.assertFalse(compute_agent.ip_allowed("100.64.0.11"))
 
     def test_ipv4_mapped_allowed(self):
         self.assertFalse(compute_agent.ip_allowed("::ffff:100.64.0.9"))
 
     def test_ipv4_mapped_other_cgnat_denied(self):
-        self.assertFalse(compute_agent.ip_allowed("::ffff:100.101.0.5"))
+        self.assertFalse(compute_agent.ip_allowed("::ffff:100.64.0.11"))
 
     def test_rfc1918_10x_denied_by_default(self):
         # 10.0.0.0/8 was removed from the default allowlist

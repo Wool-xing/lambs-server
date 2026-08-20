@@ -153,3 +153,92 @@ func TestCreateBackupPostgres(t *testing.T) {
 		t.Error("pg backup file is empty")
 	}
 }
+
+// TestRestoreBackupSQLiteRoundTrip — backup a sqlite project then restore
+// the file into a second database and verify data lands (QA round 6 idea 5:
+// the restore branch had zero execution).
+func TestRestoreBackupSQLiteRoundTrip(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 CLI not present")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (
+		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT,
+		icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0,
+		status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false,
+		icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT,
+		startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT,
+		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
+		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
+		updated_at TIMESTAMPTZ DEFAULT now(),
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+
+	// Source sqlite with real data.
+	srcPath := filepath.Join(t.TempDir(), "src.db")
+	out, err := exec.Command("sqlite3", srcPath, "CREATE TABLE t(v TEXT); INSERT INTO t VALUES('round-trip-data');").CombinedOutput()
+	if err != nil {
+		t.Fatalf("seed src: %s %v", out, err)
+	}
+	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('rt-proj', '恢复测试', $1)`, "sqlite:///"+srcPath)
+
+	baseDir := t.TempDir()
+	os.Setenv("LAMBS_BACKUP_DIR", baseDir)
+	defer os.Unsetenv("LAMBS_BACKUP_DIR")
+	backupBaseDir = baseDir
+	defer func() { backupBaseDir = "/home/ubuntu/lambs-backups" }()
+
+	sa := func(r *http.Request) {
+		r.Header.Set("X-User-ID", "admin")
+		r.Header.Set("X-Role", "super_admin")
+	}
+
+	// 1. Create the backup.
+	cr := httptest.NewRequest("POST", "/api/backups/rt-proj", nil)
+	sa(cr)
+	cw := httptest.NewRecorder()
+	CreateBackup(cw, cr, "rt-proj")
+	var bresp struct {
+		Data struct {
+			Filename string `json:"filename"`
+		} `json:"data"`
+	}
+	json.Unmarshal(cw.Body.Bytes(), &bresp)
+	if bresp.Data.Filename == "" {
+		t.Fatalf("backup failed: %s", cw.Body.String())
+	}
+
+	// 2. Restore into a SECOND sqlite file (dest db in the project row).
+	destPath := filepath.Join(t.TempDir(), "dest.db")
+	exec.Command("sqlite3", destPath, "CREATE TABLE t(v TEXT);").Run()
+	mustExec(`UPDATE projects SET dsn=$1 WHERE id='rt-proj'`, "sqlite:///"+destPath)
+
+	rr := httptest.NewRequest("POST", "/api/backups/rt-proj/restore/"+bresp.Data.Filename, nil)
+	sa(rr)
+	rr.SetPathValue("id", "rt-proj")
+	rw := httptest.NewRecorder()
+	RestoreBackup(rw, rr, "rt-proj", bresp.Data.Filename)
+	if rw.Code != 200 {
+		t.Fatalf("restore = %d (body %s)", rw.Code, rw.Body.String())
+	}
+
+	// 3. Data landed in dest.
+	got, err := exec.Command("sqlite3", destPath, "SELECT v FROM t;").Output()
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if !strings.Contains(string(got), "round-trip-data") {
+		t.Errorf("restored data missing: %q", got)
+	}
+}
