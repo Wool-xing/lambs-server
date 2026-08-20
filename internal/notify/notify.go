@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/smtp"
+	"os"
 
 	"lambs-server-go/internal/models"
 )
@@ -62,7 +63,13 @@ func SendMail(to, subject, body string) error {
 	if !ok {
 		return fmt.Errorf("smtp server does not support STARTTLS")
 	}
-	if err := c.StartTLS(&tls.Config{ServerName: config.SMTPHost}); err != nil {
+	// 内网自签 SMTP 场景：LAMBS_SMTP_INSECURE=1 跳过证书验证
+	// (自托管默认仍强制验证 — 不安全的默认值不可取)。
+	tlsCfg := &tls.Config{ServerName: config.SMTPHost}
+	if os.Getenv("LAMBS_SMTP_INSECURE") == "1" {
+		tlsCfg.InsecureSkipVerify = true
+	}
+	if err := c.StartTLS(tlsCfg); err != nil {
 		return fmt.Errorf("smtp starttls: %w", err)
 	}
 	if auth != nil {
