@@ -131,3 +131,19 @@ func TestPgSumRowsReal(t *testing.T) {
 		t.Errorf("pgSumRows err = %v", err)
 	}
 }
+
+// TestPgWithTimeout — the double-? regression guard: DSNs already carrying
+// query params (sslmode etc.) get & appended, bare DSNs get ? (QA round 9
+// fix — squash-merges had silently reverted this once).
+func TestPgWithTimeout(t *testing.T) {
+	cases := map[string]string{
+		"postgres://u:p@h/db":                     "postgres://u:p@h/db?connect_timeout=5",
+		"postgres://u:p@h/db?sslmode=disable":     "postgres://u:p@h/db?sslmode=disable&connect_timeout=5",
+		"postgres://u:p@h/db?sslmode=disable&x=1": "postgres://u:p@h/db?sslmode=disable&x=1&connect_timeout=5",
+	}
+	for in, want := range cases {
+		if got := pgWithTimeout(in); got != want {
+			t.Errorf("pgWithTimeout(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
