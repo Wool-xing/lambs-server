@@ -59,3 +59,71 @@ func TestFilterEnv(t *testing.T) {
 		})
 	}
 }
+
+// TestMinFreeMB — env parsing: valid override, invalid falls back to 100,
+// absent falls back to 100.
+func TestMinFreeMB(t *testing.T) {
+	t.Setenv("LAMBS_MIN_FREE_MB", "250")
+	if got := minFreeMB(); got != 250 {
+		t.Errorf("minFreeMB = %d, want 250", got)
+	}
+	t.Setenv("LAMBS_MIN_FREE_MB", "not-a-number")
+	if got := minFreeMB(); got != 100 {
+		t.Errorf("minFreeMB = %d, want 100 fallback", got)
+	}
+	t.Setenv("LAMBS_MIN_FREE_MB", "")
+	if got := minFreeMB(); got != 100 {
+		t.Errorf("minFreeMB = %d, want 100 default", got)
+	}
+}
+
+// TestMemAvailableFrom — parser matrix: normal line, kB→MB rounding, garbage.
+func TestMemAvailableFrom(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    int
+		wantErr bool
+	}{
+		{"MemTotal: 16000000 kB\nMemAvailable: 5242880 kB\n", 5120, false},
+		{"MemAvailable: 1024 kB\n", 1, false},
+		{"MemTotal: 16000000 kB\n", 0, true},
+		{"MemAvailable: not-a-number\n", 0, true},
+		{"", 0, true},
+	}
+	for _, c := range cases {
+		got, err := memAvailableFrom(c.in)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("memAvailableFrom(%q) = (%d, %v), want (%d, err=%v)", c.in, got, err, c.want, c.wantErr)
+		}
+	}
+}
+
+// TestParseProcStat — the field-index parser (indices are easy to get wrong
+// when the kernel format shifts; a fixed fixture locks them).
+func TestParseProcStat(t *testing.T) {
+	// 52 fields after ")" is plenty; utime/stime/starttime/rss are the
+	// 11th/12th/19th/21st fields after state.
+	fixture := "1234 (my proc name) S 1 1234 1234 0 -1 4194560 100 0 0 0 " +
+		"100 200 0 0 20 0 5 0 300 0 500 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+	ticks, rss, start := parseProcStat(fixture)
+	// fields[11]=100 (utime), fields[12]=200 (stime), fields[19]=300, fields[21]=500
+	if ticks != 300 || rss != 500 || start != 300 {
+		t.Errorf("parseProcStat = (%d, %d, %d), want (300, 500, 300)", ticks, rss, start)
+	}
+	if t2, r2, s2 := parseProcStat("no-paren"); t2 != 0 || r2 != 0 || s2 != 0 {
+		t.Errorf("malformed = (%d, %d, %d), want zeros", t2, r2, s2)
+	}
+}
+
+// TestProcUptimeFrom — pure math with a pinned clockTicks.
+func TestProcUptimeFrom(t *testing.T) {
+	old := clockTicks
+	clockTicks = 100
+	defer func() { clockTicks = old }()
+	if got := procUptimeFrom("1000.00 500.00\n", 10000); got != 900 {
+		t.Errorf("uptime = %d, want 900", got)
+	}
+	if got := procUptimeFrom("", 10000); got != 0 {
+		t.Errorf("empty uptime = %d, want 0", got)
+	}
+}
