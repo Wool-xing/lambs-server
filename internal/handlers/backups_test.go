@@ -351,3 +351,66 @@ func TestRestoreBackupContract(t *testing.T) {
 		t.Errorf("pg-dsn restore = %d (body %s), want 400", w.Code, w.Body.String())
 	}
 }
+
+// TestListBackups — prefix gate ("app" must not list "app2_*"), shape check,
+// 403 without admin.
+func TestListBackups(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	if _, err := db.DB.Exec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, dsn TEXT)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	baseDir := t.TempDir()
+	os.Setenv("LAMBS_BACKUP_DIR", baseDir)
+	defer os.Unsetenv("LAMBS_BACKUP_DIR")
+	backupBaseDir = baseDir
+	defer func() { backupBaseDir = "/home/ubuntu/lambs-backups" }()
+	for _, f := range []string{"lb.bak", "lb_20260821.bak", "lb2_evil.bak", "other.txt"} {
+		if err := os.WriteFile(filepath.Join(baseDir, f), []byte("x"), 0600); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+
+	r := httptest.NewRequest("GET", "/api/backups/lb", nil)
+	w := httptest.NewRecorder()
+	ListBackups(w, r, "lb")
+	if w.Code != 403 {
+		t.Errorf("no-role = %d, want 403", w.Code)
+	}
+
+	r = httptest.NewRequest("GET", "/api/backups/lb", nil)
+	r.Header.Set("X-Role", "super_admin")
+	w = httptest.NewRecorder()
+	ListBackups(w, r, "lb")
+	if w.Code != 200 {
+		t.Fatalf("list = %d", w.Code)
+	}
+	var env struct {
+		Data struct {
+			Backups []map[string]interface{} `json:"backups"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	names := map[string]bool{}
+	for _, b := range env.Data.Backups {
+		names[b["filename"].(string)] = true
+	}
+	// Backup filenames follow the id_<timestamp> convention; a bare name
+	// matching exactly nothing and other-project prefixes must be excluded.
+	if !names["lb_20260821.bak"] {
+		t.Errorf("missing own backup: %v", names)
+	}
+	if names["lb.bak"] {
+		t.Error("listed a non-conforming filename (lb.bak)")
+	}
+	if names["lb2_evil.bak"] {
+		t.Error("listed another project's backup (lb2_evil)")
+	}
+}
