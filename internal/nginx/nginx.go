@@ -41,7 +41,7 @@ func Sync() {
 			log.Printf("nginx: sync failed after 3 attempts, config may be stale")
 			return
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(retryDelay)
 	}
 }
 
@@ -50,25 +50,31 @@ func Sync() {
 // host would silently push configs to the wrong machine.
 var web1Host = os.Getenv("WEB1_SSH_HOST")
 
+// retryDelay backs off between Sync push attempts; tests shrink it.
+var retryDelay = 2 * time.Second
+
 // gateHost is App1's own address as reachable from Web1 (GATE_HOST env,
 // e.g. <app1-address>:3602). Deployment-specific, never hardcoded.
 var gateHost = os.Getenv("GATE_HOST")
+
+// sshRun runs one remote command over ssh; tests swap it for a stub.
+var sshRun = func(host, remoteCmd string, stdin []byte) ([]byte, error) {
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+		host, remoteCmd)
+	cmd.Stdin = bytes.NewReader(stdin)
+	return cmd.CombinedOutput()
+}
 
 func pushConfig(conf string) error {
 	if web1Host == "" {
 		log.Printf("nginx: WEB1_SSH_HOST not configured, skipping config push")
 		return fmt.Errorf("WEB1_SSH_HOST not set")
 	}
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-		web1Host, "sudo tee /etc/nginx/sites-available/lambs-managed.conf > /dev/null")
-	cmd.Stdin = bytes.NewReader([]byte(conf))
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := sshRun(web1Host, "sudo tee /etc/nginx/sites-available/lambs-managed.conf > /dev/null", []byte(conf)); err != nil {
 		log.Printf("nginx: sync write failed: %v — %s", err, string(out))
 		return err
 	}
-	cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-		web1Host, "sudo nginx -t && sudo systemctl reload nginx")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := sshRun(web1Host, "sudo nginx -t && sudo systemctl reload nginx", nil); err != nil {
 		log.Printf("nginx: sync reload failed: %v — %s", err, string(out))
 		return err
 	}
