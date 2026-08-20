@@ -226,8 +226,11 @@ func TestDetectStartupContract(t *testing.T) {
 		t.Errorf("missing repo = %d %s", c, b)
 	}
 
-	// Procfile candidate detection.
-	os.MkdirAll("/home/ubuntu/apps/detect-probe", 0755)
+	// Procfile candidate detection — /home/ubuntu may be unwritable on
+	// CI runners; degrade honestly instead of failing the suite.
+	if err := os.MkdirAll("/home/ubuntu/apps/detect-probe", 0755); err != nil {
+		t.Skipf("cannot create /home/ubuntu/apps: %v", err)
+	}
 	defer os.RemoveAll("/home/ubuntu/apps/detect-probe")
 	os.WriteFile("/home/ubuntu/apps/detect-probe/Procfile", []byte("web: python main.py\n"), 0644)
 	if c, b := post(`{"repo":"detect-probe"}`); c != 200 || !strings.Contains(b, "python main.py") {
