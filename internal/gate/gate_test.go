@@ -1,8 +1,11 @@
 package gate
 
 import (
+	"database/sql"
+	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"lambs-server-go/internal/db"
@@ -94,5 +97,32 @@ func TestHandleCheckIntegration(t *testing.T) {
 				t.Errorf("code = %d, want %d (body %s)", w.Code, c.wantCode, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestHandleOfflinePageDefault — no matching project row: the page still
+// renders branded defaults (never a 500), and hostile cookie values never
+// reach the CSS (whitelist).
+func TestHandleOfflinePageDefault(t *testing.T) {
+	// Lazy connection that never pings — QueryRow fails and the handler
+	// falls back to branded defaults (the contract under test).
+	tdb, _ := sql.Open("postgres", "postgres://u:p@127.0.0.1:1/none")
+	db.DB = tdb
+	defer func() { db.DB = nil }()
+
+	r := httptest.NewRequest("GET", "/api/gate/offline-page", nil)
+	r.Header.Set("X-Original-URI", "/some-project/page")
+	r.AddCookie(&http.Cookie{Name: "lambs_theme_accent", Value: `{"Accent":"red;}</style><script>alert(1)</script>","AccentBg":"x","Border":"y"}`})
+	w := httptest.NewRecorder()
+	HandleOfflinePage(w, r)
+	if w.Code != 200 {
+		t.Fatalf("offline page = %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "项目") {
+		t.Errorf("body missing branding: %s", body[:120])
+	}
+	if strings.Contains(body, "alert(1)") || strings.Contains(body, "};</style>") {
+		t.Errorf("hostile cookie value leaked into page: %s", body[:300])
 	}
 }
