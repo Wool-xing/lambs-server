@@ -22,7 +22,7 @@ class TestIPAllowed(unittest.TestCase):
         self.assertTrue(compute_agent.ip_allowed("127.0.0.1"))
 
     def test_tailscale_allowed(self):
-        self.assertTrue(compute_agent.ip_allowed("100.92.91.11"))
+        self.assertFalse(compute_agent.ip_allowed("100.64.0.9"))  # default list empty — env-configured only
 
     def test_other_cgnat_denied(self):
         # 100.64.0.0/10 was narrowed to app1's Tailscale IP — carrier-grade
@@ -30,7 +30,7 @@ class TestIPAllowed(unittest.TestCase):
         self.assertFalse(compute_agent.ip_allowed("100.101.0.5"))
 
     def test_ipv4_mapped_allowed(self):
-        self.assertTrue(compute_agent.ip_allowed("::ffff:100.92.91.11"))
+        self.assertFalse(compute_agent.ip_allowed("::ffff:100.64.0.9"))
 
     def test_ipv4_mapped_other_cgnat_denied(self):
         self.assertFalse(compute_agent.ip_allowed("::ffff:100.101.0.5"))
