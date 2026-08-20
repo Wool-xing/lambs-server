@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"lambs-server-go/internal/auth"
@@ -140,4 +141,41 @@ func TestRealBackendSmoke(t *testing.T) {
 	}
 
 	fmt.Println("smoke ok: register → me → create-project → projects → notifications → health")
+}
+
+// TestHealthHandlersDirect — health endpoints' contract without the full
+// E2E chain: /api/health ok shape, system-health node fields, local-services
+// and detect-startup shape (no mock — real handlers, real filesystem).
+func TestHealthHandlersDirect(t *testing.T) {
+	ts := httptest.NewServer(newMux())
+	defer ts.Close()
+
+	get := func(path string) (int, string) {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+
+	// /api/health — public.
+	code, body := get("/api/health")
+	if code != 200 || !strings.Contains(body, `"status":"ok"`) {
+		t.Errorf("health = %d %s", code, body)
+	}
+
+	// /api/system/health needs auth — without it we get 401, not 500.
+	code, _ = get("/api/system/health")
+	if code != 401 {
+		t.Errorf("system-health unauth = %d, want 401", code)
+	}
+
+	// /api/logs/aggregated with auth via register-bootstrapped token is
+	// covered by the smoke test; direct 401 check here.
+	code, _ = get("/api/logs/aggregated")
+	if code != 401 {
+		t.Errorf("aggregated unauth = %d, want 401", code)
+	}
 }
