@@ -242,3 +242,112 @@ func TestRestoreBackupSQLiteRoundTrip(t *testing.T) {
 		t.Errorf("restored data missing: %q", got)
 	}
 }
+
+// TestDownloadBackupContract — 403 without admin role, 404 for unknown
+// backups, 200 + content when the file exists (safeBackupPath gate).
+func TestDownloadBackupContract(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, dsn TEXT, service_name TEXT)`)
+	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('dl-proj','下载测试','—')`)
+
+	baseDir := t.TempDir()
+	os.Setenv("LAMBS_BACKUP_DIR", baseDir)
+	defer os.Unsetenv("LAMBS_BACKUP_DIR")
+	backupBaseDir = baseDir
+	defer func() { backupBaseDir = "/home/ubuntu/lambs-backups" }()
+
+	// 403: no admin role.
+	r := httptest.NewRequest("GET", "/api/backups/dl-proj/download/dl-proj_20260821.bak", nil)
+	w := httptest.NewRecorder()
+	DownloadBackup(w, r, "dl-proj", "dl-proj_20260821.bak")
+	if w.Code != 403 {
+		t.Errorf("no-role code = %d, want 403", w.Code)
+	}
+
+	// 404: backup file missing.
+	r = httptest.NewRequest("GET", "/api/backups/dl-proj/download/nope.bak", nil)
+	r.Header.Set("X-User-ID", "admin")
+	r.Header.Set("X-Role", "super_admin")
+	w = httptest.NewRecorder()
+	DownloadBackup(w, r, "dl-proj", "nope.bak")
+	if w.Code != 404 {
+		t.Errorf("missing file code = %d, want 404", w.Code)
+	}
+
+	// 200: file exists and is served (backups live flat under baseDir,
+	// the id is only a filename-prefix gate).
+	if err := os.WriteFile(filepath.Join(baseDir, "dl-proj_20260821.bak"), []byte("backup-bytes"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	r = httptest.NewRequest("GET", "/api/backups/dl-proj/download/dl-proj_20260821.bak", nil)
+	r.Header.Set("X-User-ID", "admin")
+	r.Header.Set("X-Role", "super_admin")
+	w = httptest.NewRecorder()
+	DownloadBackup(w, r, "dl-proj", "dl-proj_20260821.bak")
+	if w.Code != 200 {
+		t.Fatalf("download code = %d, want 200", w.Code)
+	}
+	if w.Body.String() != "backup-bytes" {
+		t.Errorf("body = %q, want backup-bytes", w.Body.String())
+	}
+}
+
+// TestRestoreBackupContract — 403 without admin, 400 for projects without
+// an independent sqlite DB, 400 for non-sqlite DSNs. (The sqlite success
+// path is covered by the round-trip test above.)
+func TestRestoreBackupContract(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, dsn TEXT, service_name TEXT)`)
+	mustExec(`INSERT INTO projects (id, name, dsn) VALUES
+		('rs-proj-a','无独立库','—'), ('rs-proj-b','PG库',$1)`, dsn)
+	baseDir := t.TempDir()
+	os.Setenv("LAMBS_BACKUP_DIR", baseDir)
+	defer os.Unsetenv("LAMBS_BACKUP_DIR")
+	backupBaseDir = baseDir
+	defer func() { backupBaseDir = "/home/ubuntu/lambs-backups" }()
+
+	post := func(id, file string, admin bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/api/backups/"+id+"/restore/"+file, nil)
+		if admin {
+			r.Header.Set("X-User-ID", "admin")
+			r.Header.Set("X-Role", "super_admin")
+		}
+		w := httptest.NewRecorder()
+		RestoreBackup(w, r, id, file)
+		return w
+	}
+
+	if w := post("rs-proj-a", "x.bak", false); w.Code != 403 {
+		t.Errorf("no-role restore = %d, want 403", w.Code)
+	}
+	if w := post("rs-proj-a", "x.bak", true); w.Code != 400 {
+		t.Errorf("dash-dsn restore = %d (body %s), want 400", w.Code, w.Body.String())
+	}
+	if w := post("rs-proj-b", "x.bak", true); w.Code != 400 {
+		t.Errorf("pg-dsn restore = %d (body %s), want 400", w.Code, w.Body.String())
+	}
+}
