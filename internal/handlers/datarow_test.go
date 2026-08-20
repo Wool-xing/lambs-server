@@ -248,3 +248,103 @@ func TestGetProject(t *testing.T) {
 	}
 	mustExec(`DELETE FROM projects WHERE id='gp-proj'`)
 }
+
+// TestPinProjectToggle — 403 without admin; pin toggles false→true→false
+// in the DB and the response reports the new state.
+func TestPinProjectToggle(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, is_pinned BOOLEAN DEFAULT false)`)
+	mustExec(`INSERT INTO projects (id, name, is_pinned) VALUES ('pin-proj','钉项目',false)
+		ON CONFLICT (id) DO UPDATE SET is_pinned=false`)
+
+	call := func(admin bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PATCH", "/api/projects/pin-proj/pin", nil)
+		if admin {
+			r.Header.Set("X-Role", "super_admin")
+		}
+		w := httptest.NewRecorder()
+		PinProject(w, r, "pin-proj")
+		return w
+	}
+
+	if w := call(false); w.Code != 403 {
+		t.Errorf("no-role = %d, want 403", w.Code)
+	}
+	// false → true.
+	if w := call(true); w.Code != 200 || !strings.Contains(w.Body.String(), `"is_pinned":true`) {
+		t.Fatalf("first toggle = %d (%s)", w.Code, w.Body.String())
+	}
+	var pinned bool
+	db.DB.QueryRow("SELECT is_pinned FROM projects WHERE id='pin-proj'").Scan(&pinned)
+	if !pinned {
+		t.Error("is_pinned not persisted after toggle")
+	}
+	// true → false.
+	call(true)
+	db.DB.QueryRow("SELECT is_pinned FROM projects WHERE id='pin-proj'").Scan(&pinned)
+	if pinned {
+		t.Error("second toggle did not unpin")
+	}
+	mustExec(`DELETE FROM projects WHERE id='pin-proj'`)
+}
+
+// TestReorderProjects — both payload formats land sort_order in the DB.
+func TestReorderProjects(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, sort_order INT DEFAULT 0)`)
+	mustExec(`INSERT INTO projects (id, name) VALUES ('ro-a','A'),('ro-b','B'),('ro-c','C')
+		ON CONFLICT (id) DO NOTHING`)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PATCH", "/api/projects/reorder", strings.NewReader(body))
+		r.Header.Set("X-Role", "super_admin")
+		w := httptest.NewRecorder()
+		ReorderProjects(w, r)
+		return w
+	}
+
+	// Format 1: ordered_ids.
+	if w := post(`{"ordered_ids":["ro-c","ro-a","ro-b"]}`); w.Code != 200 {
+		t.Fatalf("format1 = %d (%s)", w.Code, w.Body.String())
+	}
+	var o1, o2, o3 int
+	db.DB.QueryRow("SELECT sort_order FROM projects WHERE id='ro-c'").Scan(&o1)
+	db.DB.QueryRow("SELECT sort_order FROM projects WHERE id='ro-a'").Scan(&o2)
+	db.DB.QueryRow("SELECT sort_order FROM projects WHERE id='ro-b'").Scan(&o3)
+	if o1 != 1 || o2 != 2 || o3 != 3 {
+		t.Errorf("format1 orders = %d/%d/%d, want 1/2/3", o1, o2, o3)
+	}
+
+	// Format 2: [{id, sort_order}].
+	if w := post(`[{"id":"ro-a","sort_order":9},{"id":"ro-b","sort_order":8}]`); w.Code != 200 {
+		t.Fatalf("format2 = %d (%s)", w.Code, w.Body.String())
+	}
+	db.DB.QueryRow("SELECT sort_order FROM projects WHERE id='ro-a'").Scan(&o2)
+	db.DB.QueryRow("SELECT sort_order FROM projects WHERE id='ro-b'").Scan(&o3)
+	if o2 != 9 || o3 != 8 {
+		t.Errorf("format2 orders = %d/%d, want 9/8", o2, o3)
+	}
+	mustExec(`DELETE FROM projects WHERE id IN ('ro-a','ro-b','ro-c')`)
+}
