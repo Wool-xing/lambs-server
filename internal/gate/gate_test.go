@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -110,9 +111,13 @@ func TestHandleOfflinePageDefault(t *testing.T) {
 	db.DB = tdb
 	defer func() { db.DB = nil }()
 
+	// The hostile value is fully URL-encoded: raw ';' splits the Cookie
+	// header and raw '"' gets stripped by cookie parsing — either way the
+	// payload never reached the CSS whitelist and the assertion was passing
+	// on the wrong defense (mutation-testing the whitelist exposed this).
 	r := httptest.NewRequest("GET", "/api/gate/offline-page", nil)
 	r.Header.Set("X-Original-URI", "/some-project/page")
-	r.AddCookie(&http.Cookie{Name: "lambs_theme_accent", Value: `{"Accent":"red;}</style><script>alert(1)</script>","AccentBg":"x","Border":"y"}`})
+	r.AddCookie(&http.Cookie{Name: "lambs_theme_accent", Value: url.QueryEscape(`{"Accent":"red;}</style><script>alert(1)</script>","AccentBg":"x","Border":"y"}`)})
 	w := httptest.NewRecorder()
 	HandleOfflinePage(w, r)
 	if w.Code != 200 {
