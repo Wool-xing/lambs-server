@@ -126,3 +126,31 @@ func TestHandleOfflinePageDefault(t *testing.T) {
 		t.Errorf("hostile cookie value leaked into page: %s", body[:300])
 	}
 }
+
+// TestHandleProjectLogoMissingRow — no matching project: 404 via the lazy
+// connection (route-matrix gap: this endpoint had zero route-level coverage).
+func TestHandleProjectLogoMissingRow(t *testing.T) {
+	tdb, _ := sql.Open("postgres", "postgres://u:p@127.0.0.1:1/none")
+	old := db.DB
+	db.DB = tdb
+	t.Cleanup(func() { db.DB = old })
+
+	r := httptest.NewRequest("GET", "/api/gate/project-logo?path=/nope", nil)
+	w := httptest.NewRecorder()
+	HandleProjectLogo(w, r)
+	if w.Code != 404 {
+		t.Errorf("project-logo = %d, want 404", w.Code)
+	}
+}
+
+// TestHandleCheckInternalNoAuth — nginx auth_request loopback: same
+// contract as HandleCheck with no auth required. The empty-path fast path
+// short-circuits before any DB access, so no test DB is needed.
+func TestHandleCheckInternalNoAuth(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/gate/check-internal", nil)
+	w := httptest.NewRecorder()
+	HandleCheckInternal(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"allowed":true`) {
+		t.Errorf("check-internal = %d %s", w.Code, w.Body.String())
+	}
+}

@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/base64"
+	"net/http/httptest"
 	"testing"
+
+	"lambs-server-go/internal/db"
 )
 
 func TestDataURLBytes(t *testing.T) {
@@ -49,5 +53,22 @@ func TestDataURLBytes(t *testing.T) {
 				t.Errorf("raw=%v want %v", raw, c.wantRaw)
 			}
 		})
+	}
+}
+
+// TestProjectLogoMissingRow — no project row: 404, never a panic. The lazy
+// connection makes QueryRow/Scan fail and the handler must degrade to 404
+// (route-matrix gap: this endpoint had zero route-level coverage).
+func TestProjectLogoMissingRow(t *testing.T) {
+	tdb, _ := sql.Open("postgres", "postgres://u:p@127.0.0.1:1/none")
+	old := db.DB
+	db.DB = tdb
+	t.Cleanup(func() { db.DB = old })
+
+	r := httptest.NewRequest("GET", "/api/projects/no-such/logo", nil)
+	w := httptest.NewRecorder()
+	ProjectLogo(w, r, "no-such")
+	if w.Code != 404 {
+		t.Errorf("logo = %d, want 404", w.Code)
 	}
 }
