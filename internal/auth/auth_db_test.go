@@ -37,7 +37,9 @@ func TestHandleLoginRealDB(t *testing.T) {
 		last_login TIMESTAMPTZ DEFAULT now(),
 		created_at TIMESTAMPTZ DEFAULT now())`)
 	mustExec(`DELETE FROM users`)
+	oldKey := JWTKey
 	JWTKey = []byte("test-key")
+	t.Cleanup(func() { JWTKey = oldKey })
 
 	// Seed one active + one disabled user with the register-pipeline hash
 	// shape: bcrypt(sha256(plaintext)).

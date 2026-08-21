@@ -157,6 +157,8 @@ func TestSendMailRoundTrip(t *testing.T) {
 	s := &fakeSMTP{ln: ln, done: make(chan struct{})}
 	go s.serve(cert)
 
+	oldCfg := config
+	t.Cleanup(func() { config = oldCfg })
 	SetConfig(&models.Config{
 		SMTPHost:     "127.0.0.1",
 		SMTPPort:     fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port),
@@ -197,6 +199,8 @@ func TestSendMailRejectsNoSTARTTLS(t *testing.T) {
 		fmt.Fprintf(conn, "250 fake\r\n")
 	}()
 
+	oldCfg := config
+	t.Cleanup(func() { config = oldCfg })
 	SetConfig(&models.Config{
 		SMTPHost: "127.0.0.1",
 		SMTPPort: fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port),
