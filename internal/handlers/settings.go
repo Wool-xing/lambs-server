@@ -14,6 +14,7 @@ import (
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/execpath"
 	"lambs-server-go/internal/models"
 )
 
@@ -133,7 +134,7 @@ func ExportProjectUsers(w http.ResponseWriter, r *http.Request, id string) {
 		dsn2 := strings.TrimPrefix(strings.TrimPrefix(dsn, "sqlite:///"), "sqlite://")
 		if idx := strings.Index(dsn2, "?"); idx >= 0 { dsn2 = dsn2[:idx] }
 		for _, table := range []string{"users", "user", "accounts", "member"} {
-			cmd := exec.Command("sqlite3", "-header", "-csv", dsn2, fmt.Sprintf("SELECT * FROM %s;", table))
+			cmd := exec.Command(execpath.Path("sqlite3"), "-header", "-csv", dsn2, fmt.Sprintf("SELECT * FROM %s;", table))
 			var out bytes.Buffer; cmd.Stdout = &out
 			if err := cmd.Run(); err != nil || out.Len() == 0 { continue }
 			var filtered bytes.Buffer; header := true; var pwCols []int

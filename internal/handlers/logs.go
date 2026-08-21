@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"lambs-server-go/internal/auth"
+	"lambs-server-go/internal/execpath"
 )
 
 // journalRe parses journalctl short-iso lines:
@@ -59,7 +60,7 @@ func HandleSystemLogs(w http.ResponseWriter, r *http.Request) {
 	if lines < 1 || lines > 200 {
 		lines = 30
 	}
-	out, err := exec.Command("journalctl", "-u", "lambs-server", "--no-pager", "-o", "short-iso", "-n", strconv.Itoa(lines)).Output()
+	out, err := exec.Command(execpath.Path("journalctl"), "-u", "lambs-server", "--no-pager", "-o", "short-iso", "-n", strconv.Itoa(lines)).Output()
 	logs := []map[string]interface{}{}
 	if err != nil {
 		// Degrade to an empty list — the card shows 暂无日志 instead of dying.

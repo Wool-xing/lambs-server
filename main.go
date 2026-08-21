@@ -16,6 +16,7 @@ import (
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/execpath"
 	"lambs-server-go/internal/gate"
 	"lambs-server-go/internal/handlers"
 	"lambs-server-go/internal/models"
@@ -343,7 +344,7 @@ func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if svc != "" {
-		cmd := exec.Command("journalctl", "-u", svc+".service", "-n", strconv.Itoa(lines), "--no-pager", "-o", "short")
+		cmd := exec.Command(execpath.Path("journalctl"), "-u", svc+".service", "-n", strconv.Itoa(lines), "--no-pager", "-o", "short")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			auth.JSONOK(w, map[string]interface{}{"logs": []string{"journalctl: " + strings.TrimSpace(string(out)) + " " + err.Error()}})
