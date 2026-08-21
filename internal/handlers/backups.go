@@ -15,6 +15,7 @@ import (
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/execpath"
 	"lambs-server-go/internal/models"
 	"lambs-server-go/internal/notify"
 	"lambs-server-go/internal/tgbackup"
@@ -125,7 +126,7 @@ func RestoreBackup(w http.ResponseWriter, r *http.Request, id, filename string) 
 	// WAL-safe restore via the sqlite3 backup API — writing the file directly
 	// would orphan -wal/-shm pages and corrupt the live database.
 	escaped := strings.Replace(dsn2, "'", "''", -1)
-	cmd := exec.Command("sqlite3", backupPath, fmt.Sprintf(".backup '%s'", escaped))
+	cmd := exec.Command(execpath.Path("sqlite3"), backupPath, fmt.Sprintf(".backup '%s'", escaped))
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
@@ -171,7 +172,7 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 		// Use SQLite's online backup API for a consistent snapshot even while the app writes
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "sqlite3", path, fmt.Sprintf(".backup '%s'", fpath))
+		cmd := exec.CommandContext(ctx, execpath.Path("sqlite3"), path, fmt.Sprintf(".backup '%s'", fpath))
 		var errBuf bytes.Buffer
 		cmd.Stderr = &errBuf
 		if err := cmd.Run(); err != nil {
@@ -188,7 +189,7 @@ func doBackup(projectID, dsn string) map[string]interface{} {
 		user, password, host, port, dbname := parsePGDSN(dsn)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname, "-f", fpath, "--no-owner", "--no-acl")
+		cmd := exec.CommandContext(ctx, execpath.Path("pg_dump"), "-h", host, "-p", port, "-U", user, "-d", dbname, "-f", fpath, "--no-owner", "--no-acl")
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
 		out, err := cmd.CombinedOutput()
 		if err != nil { log.Printf("pg_dump: %s %v", string(out), err); return map[string]interface{}{"ok": false, "error": "备份执行失败"} }

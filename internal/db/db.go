@@ -18,6 +18,8 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
+
+	"lambs-server-go/internal/execpath"
 )
 
 // DB is the global database connection pool.
@@ -238,7 +240,7 @@ func SyncUserData(dsn string) []map[string]interface{} {
 			}
 			// Real rows via sqlite3 -json, password/token columns excluded
 			var colOut bytes.Buffer
-			colCmd := exec.Command("sqlite3", dsn2, fmt.Sprintf("PRAGMA table_info(%s);", table))
+			colCmd := exec.Command(execpath.Path("sqlite3"), dsn2, fmt.Sprintf("PRAGMA table_info(%s);", table))
 			colCmd.Stdout = &colOut
 			if err := colCmd.Run(); err != nil || colOut.Len() == 0 {
 				continue
@@ -261,7 +263,7 @@ func SyncUserData(dsn string) []map[string]interface{} {
 				quoted[i] = fmt.Sprintf("\"%s\"", c)
 			}
 			var out bytes.Buffer
-			cmd := exec.Command("sqlite3", "-json", dsn2, fmt.Sprintf("SELECT %s FROM %s LIMIT 500;", strings.Join(quoted, ","), table))
+			cmd := exec.Command(execpath.Path("sqlite3"), "-json", dsn2, fmt.Sprintf("SELECT %s FROM %s LIMIT 500;", strings.Join(quoted, ","), table))
 			cmd.Stdout = &out
 			if err := cmd.Run(); err != nil {
 				continue
@@ -377,7 +379,7 @@ func SyncUserCount(dsn string) int {
 			if !safeTableName.MatchString(table) {
 				continue
 			}
-			cmd := exec.Command("sqlite3", dsn2, fmt.Sprintf("SELECT COUNT(*) FROM %s;", table))
+			cmd := exec.Command(execpath.Path("sqlite3"), dsn2, fmt.Sprintf("SELECT COUNT(*) FROM %s;", table))
 			var out bytes.Buffer
 			cmd.Stdout = &out
 			if err := cmd.Run(); err != nil {

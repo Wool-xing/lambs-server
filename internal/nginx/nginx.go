@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/execpath"
 	"lambs-server-go/internal/models"
 )
 
@@ -59,7 +60,7 @@ var gateHost = os.Getenv("GATE_HOST")
 
 // sshRun runs one remote command over ssh; tests swap it for a stub.
 var sshRun = func(host, remoteCmd string, stdin []byte) ([]byte, error) {
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+	cmd := exec.Command(execpath.Path("ssh"), "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
 		host, remoteCmd)
 	cmd.Stdin = bytes.NewReader(stdin)
 	return cmd.CombinedOutput()

@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"lambs-server-go/internal/execpath"
 )
 
 // SQLiteSource implements DataSource for SQLite-managed projects.
@@ -25,7 +27,7 @@ func (s *SQLiteSource) dbPath() string {
 }
 
 func (s *SQLiteSource) ListCollections() ([]string, error) {
-	cmd := exec.Command("sqlite3", s.dbPath(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
+	cmd := exec.Command(execpath.Path("sqlite3"), s.dbPath(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -44,7 +46,7 @@ func (s *SQLiteSource) CountItems(collection string) (int, error) {
 	if err := validateTable(collection); err != nil {
 		return 0, err
 	}
-	out, err := exec.Command("sqlite3", s.dbPath(), fmt.Sprintf("SELECT COUNT(*) FROM %s;", collection)).Output()
+	out, err := exec.Command(execpath.Path("sqlite3"), s.dbPath(), fmt.Sprintf("SELECT COUNT(*) FROM %s;", collection)).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -62,7 +64,7 @@ func (s *SQLiteSource) ReadItems(collection string, limit, offset int) ([]map[st
 	}
 	for _, t := range tables {
 		// Get column names via PRAGMA
-		cmd := exec.Command("sqlite3", s.dbPath(), fmt.Sprintf("PRAGMA table_info(%s);", t))
+		cmd := exec.Command(execpath.Path("sqlite3"), s.dbPath(), fmt.Sprintf("PRAGMA table_info(%s);", t))
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		if err := cmd.Run(); err != nil {
@@ -95,7 +97,7 @@ func (s *SQLiteSource) ReadItems(collection string, limit, offset int) ([]map[st
 		if limit > 0 {
 			paging = fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 		}
-		cmd2 := exec.Command("sqlite3", "-json", s.dbPath(), fmt.Sprintf("SELECT %s FROM %s%s;", strings.Join(quotedCols, ","), t, paging))
+		cmd2 := exec.Command(execpath.Path("sqlite3"), "-json", s.dbPath(), fmt.Sprintf("SELECT %s FROM %s%s;", strings.Join(quotedCols, ","), t, paging))
 		var out2 bytes.Buffer
 		cmd2.Stdout = &out2
 		if err := cmd2.Run(); err != nil {
@@ -127,7 +129,7 @@ func (s *SQLiteSource) InsertItem(collection string, data map[string]interface{}
 		colVals = append(colVals, fmt.Sprintf("'%v'", strings.Replace(fmt.Sprintf("%v", v), "'", "''", -1)))
 	}
 	sqlStr := fmt.Sprintf("INSERT INTO \"%s\" (%s) VALUES (%s)", collection, strings.Join(colNames, ","), strings.Join(colVals, ","))
-	cmd := exec.Command("sqlite3", s.dbPath(), sqlStr)
+	cmd := exec.Command(execpath.Path("sqlite3"), s.dbPath(), sqlStr)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
@@ -153,7 +155,7 @@ func (s *SQLiteSource) UpdateItem(collection, pkCol, pkVal string, data map[stri
 		sqlStr += fmt.Sprintf("\"%s\"='%v'", k, strings.Replace(fmt.Sprintf("%v", v), "'", "''", -1))
 	}
 	sqlStr += fmt.Sprintf(" WHERE \"%s\"=%s", pkCol, sqliteVal(pkVal))
-	cmd := exec.Command("sqlite3", s.dbPath(), sqlStr)
+	cmd := exec.Command(execpath.Path("sqlite3"), s.dbPath(), sqlStr)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
@@ -166,7 +168,7 @@ func (s *SQLiteSource) DeleteItem(collection, pkCol, pkVal string) error {
 	if err := validateTable(collection); err != nil {
 		return err
 	}
-	cmd := exec.Command("sqlite3", s.dbPath(), fmt.Sprintf("DELETE FROM \"%s\" WHERE \"%s\"=%s", collection, pkCol, sqliteVal(pkVal)))
+	cmd := exec.Command(execpath.Path("sqlite3"), s.dbPath(), fmt.Sprintf("DELETE FROM \"%s\" WHERE \"%s\"=%s", collection, pkCol, sqliteVal(pkVal)))
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
