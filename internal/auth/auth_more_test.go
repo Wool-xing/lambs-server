@@ -26,7 +26,9 @@ func signToken(t *testing.T, uid, role string, exp time.Time) string {
 // a CRITICAL header-spoofing hole; verdict: Header.Set overwrites them —
 // this test is the regression guard for that verdict).
 func TestRequireAuthOverwritesForgedHeaders(t *testing.T) {
+	old := JWTKey
 	JWTKey = []byte("test-key")
+	t.Cleanup(func() { JWTKey = old })
 	req := httptest.NewRequest("GET", "/api/me", nil)
 	req.Header.Set("Authorization", "Bearer "+signToken(t, "u1", "viewer", time.Now().Add(time.Hour)))
 	req.Header.Set("X-User-ID", "evil-admin")

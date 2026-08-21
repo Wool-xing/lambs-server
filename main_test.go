@@ -29,7 +29,9 @@ func TestRealBackendSmoke(t *testing.T) {
 	if err := db.Init(dsn); err != nil {
 		t.Fatalf("init db: %v", err)
 	}
+	oldKey := auth.JWTKey
 	auth.JWTKey = []byte("e2e-test-jwt-secret-32-bytes-long")
+	t.Cleanup(func() { auth.JWTKey = oldKey })
 
 	mustExec := func(q string, args ...interface{}) {
 		if _, err := db.DB.Exec(q, args...); err != nil {
