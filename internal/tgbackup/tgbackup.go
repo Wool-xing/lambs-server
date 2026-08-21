@@ -117,7 +117,12 @@ func Upload(filePath, caption string) (map[string]interface{}, error) {
 	}
 	w.Close()
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", secrets.token)
+	// TG_API_BASE override for self-hosted bot servers and the contract test.
+	base := os.Getenv("TG_API_BASE")
+	if base == "" {
+		base = "https://api.telegram.org"
+	}
+	url := fmt.Sprintf("%s/bot%s/sendDocument", base, secrets.token)
 	resp, err := httpClient.Post(url, w.FormDataContentType(), &buf)
 	if err != nil {
 		if cleanup != "" {

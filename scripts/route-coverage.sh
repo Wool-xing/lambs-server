@@ -17,12 +17,13 @@ grep -n 'mux.HandleFunc(' main.go | cut -d: -f1 | while read -r ln; do
   method=$(echo "$spec" | cut -d' ' -f1)
   path=$(echo "$spec" | cut -d' ' -f2-)
   # Thin-shell routes: inline closures over unit-tested managers. Exercising
-  # them end-to-end would spawn real processes (proc/proxy start) or hit the
-  # TG network path — QA round 8 disposition: unit tests at manager level,
-  # route layer 销账. upload-tg is queued as calibration candidate 9
-  # (mock TG server contract replay); remove from this list when it lands.
+  # them end-to-end would spawn real processes (proc/proxy start) — QA round
+  # 8 disposition: unit tests at manager level, route layer 销账.
+  # (upload-tg left this list when candidate 9 landed: the route wrapper's
+  # 403/404 branches are covered and the TG protocol has a mock-server
+  # contract test in internal/tgbackup.)
   case "$spec" in
-    "POST /api/runtime/ports/allocate/{id}"|"POST /api/runtime/proc/start/{id}"|"POST /api/runtime/proc/stop/{id}"|"POST /api/runtime/proc/restart/{id}"|"GET /api/runtime/proc/status/{id}"|"GET /api/runtime/proc/list"|"POST /api/runtime/proxy/start/{id}"|"POST /api/runtime/proxy/stop/{id}"|"POST /api/backups/{id}/upload-tg/{file}")
+    "POST /api/runtime/ports/allocate/{id}"|"POST /api/runtime/proc/start/{id}"|"POST /api/runtime/proc/stop/{id}"|"POST /api/runtime/proc/restart/{id}"|"GET /api/runtime/proc/status/{id}"|"GET /api/runtime/proc/list"|"POST /api/runtime/proxy/start/{id}"|"POST /api/runtime/proxy/stop/{id}")
       echo "OK(shell) $spec"
       continue
       ;;
