@@ -414,3 +414,26 @@ func TestListBackups(t *testing.T) {
 		t.Error("listed another project's backup (lb2_evil)")
 	}
 }
+
+// TestUploadBackupToTGNoAccess — no role header: 403 before any DB or TG
+// work (route-matrix gap: upload-tg wrapper had zero coverage).
+func TestUploadBackupToTGNoAccess(t *testing.T) {
+	r := httptest.NewRequest("POST", "/api/backups/p/upload-tg/p_20260821.bak", nil)
+	w := httptest.NewRecorder()
+	UploadBackupToTG(w, r, "p", "p_20260821.bak")
+	if w.Code != 403 {
+		t.Errorf("upload-tg = %d, want 403", w.Code)
+	}
+}
+
+// TestUploadBackupToTGForeignFile — super_admin with a filename not owned by
+// the project: safeBackupPath rejects it with 404 before any TG call.
+func TestUploadBackupToTGForeignFile(t *testing.T) {
+	r := httptest.NewRequest("POST", "/api/backups/p/upload-tg/q_20260821.bak", nil)
+	r.Header.Set("X-Role", "super_admin")
+	w := httptest.NewRecorder()
+	UploadBackupToTG(w, r, "p", "q_20260821.bak")
+	if w.Code != 404 {
+		t.Errorf("upload-tg = %d, want 404", w.Code)
+	}
+}
