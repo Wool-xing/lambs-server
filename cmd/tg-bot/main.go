@@ -376,7 +376,10 @@ func handleCommand(chatID int64, text string) {
 			}
 		}
 		out += fmt.Sprintf("\ntotal: %d files %s", totalF, fmtSize(totalS))
-		bot.send(chatID, out[:4000])
+		if len(out) > 4000 {
+			out = out[:4000]
+		}
+		bot.send(chatID, out)
 
 	case text == "/stop":
 		bot.send(chatID, "已休眠，发消息自动唤醒")
