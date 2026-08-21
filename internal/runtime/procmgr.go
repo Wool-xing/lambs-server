@@ -47,9 +47,13 @@ type ProcManager struct {
 	procs    map[string]*procState
 	services map[string]*svcState
 	samples  map[string]cpuSample
+	// lastAlert is the per-project restart-alert cooldown (R12 perf review:
+	// a crash-looping process must not insert a notification every 30s).
+	// Lifted from a HealthMonitor local so healthOnce can be tested alone.
+	lastAlert map[string]time.Time
 }
 
-var ProcMgr = &ProcManager{procs: make(map[string]*procState), services: make(map[string]*svcState), samples: make(map[string]cpuSample)}
+var ProcMgr = &ProcManager{procs: make(map[string]*procState), services: make(map[string]*svcState), samples: make(map[string]cpuSample), lastAlert: make(map[string]time.Time)}
 
 // clockTicks is the kernel jiffies-per-second (usually 100), detected at startup.
 var clockTicks = 100.0
@@ -550,79 +554,83 @@ func (pm *ProcManager) serviceRunning(st *svcState) bool {
 }
 
 // HealthMonitor checks managed processes every 30s.
+// healthOnce is one health-monitor pass — extracted so the cycle logic is
+// testable without the never-returning monitor loop (which sleeps first and
+// can only be exercised in production).
+func (pm *ProcManager) healthOnce(enabled func() bool) {
+	if !enabled() {
+		return
+	}
+	// Only projects with a managed process enter the health loop. Pure
+	// datasource projects (no startup_command/service_name) have no
+	// process to check — they were misreported as "down" every cycle,
+	// spawning a useless restart attempt + log line every 30s.
+	rows, err := db.DB.Query("SELECT id, name FROM projects WHERE status='online' AND (COALESCE(startup_command,'') <> '' OR COALESCE(service_name,'') <> '')")
+	if err != nil {
+		return
+	}
+	type entry struct{ id, name string }
+	var projects []entry
+	for rows.Next() {
+		var e entry
+		rows.Scan(&e.id, &e.name)
+		projects = append(projects, e)
+	}
+	rows.Close()
+	for _, p := range projects {
+		st := pm.Status(p.id)
+		if running, _ := st["running"].(bool); running {
+			continue
+		}
+		if starting, _ := st["starting"].(bool); starting {
+			continue // still initializing, skip this cycle
+		}
+		log.Printf("health: %s (%s) is down, restarting", p.name, p.id)
+		if err := pm.Start(p.id); err != nil {
+			// Projects with no startup_command/service_name are pure
+			// datasources — nothing to restart, no alarm needed.
+			if strings.Contains(err.Error(), "no service_name") {
+				continue
+			}
+			log.Printf("health: %s restart failed: %v", p.name, err)
+			if time.Since(pm.lastAlert[p.id]) > 10*time.Minute {
+				pm.lastAlert[p.id] = time.Now()
+				nid := fmt.Sprintf("n%d", time.Now().UnixNano())
+				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "alert", "进程异常", fmt.Sprintf("「%s」进程意外退出，自动重启失败: %v", p.name, err))
+			}
+			continue
+		}
+		nid := fmt.Sprintf("n%d", time.Now().UnixNano())
+		db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "info", "进程恢复", fmt.Sprintf("「%s」进程已自动重启", p.name))
+	}
+	// Shared services: referenced (refs>0) but not running → restart.
+	pm.mu.RLock()
+	shared := make([]*svcState, 0, len(pm.services))
+	for _, st := range pm.services {
+		if len(st.refs) > 0 {
+			shared = append(shared, st)
+		}
+	}
+	pm.mu.RUnlock()
+	for _, st := range shared {
+		if pm.serviceRunning(st) {
+			continue
+		}
+		log.Printf("health: shared service %s down, restarting", st.name)
+		if err := pm.startShared(st); err != nil {
+			db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
+				fmt.Sprintf("n%d", time.Now().UnixNano()), "", "alert", "共享服务异常", fmt.Sprintf("「%s」重启失败: %v", st.name, err))
+		} else {
+			db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
+				fmt.Sprintf("n%d", time.Now().UnixNano()), "", "info", "共享服务恢复", fmt.Sprintf("「%s」已自动重启", st.name))
+		}
+	}
+}
+
 func (pm *ProcManager) HealthMonitor(enabled func() bool) {
-	lastAlert := map[string]time.Time{} // per-project alert cooldown
 	for {
 		time.Sleep(30 * time.Second)
-		if !enabled() {
-			continue
-		}
-		// Only projects with a managed process enter the health loop. Pure
-		// datasource projects (no startup_command/service_name) have no
-		// process to check — they were misreported as "down" every cycle,
-		// spawning a useless restart attempt + log line every 30s.
-		rows, err := db.DB.Query("SELECT id, name FROM projects WHERE status='online' AND (COALESCE(startup_command,'') <> '' OR COALESCE(service_name,'') <> '')")
-		if err != nil {
-			continue
-		}
-		type entry struct{ id, name string }
-		var projects []entry
-		for rows.Next() {
-			var e entry
-			rows.Scan(&e.id, &e.name)
-			projects = append(projects, e)
-		}
-		rows.Close()
-		for _, p := range projects {
-			st := pm.Status(p.id)
-			if running, _ := st["running"].(bool); running {
-				continue
-			}
-			if starting, _ := st["starting"].(bool); starting {
-				continue // still initializing, skip this cycle
-			}
-			log.Printf("health: %s (%s) is down, restarting", p.name, p.id)
-			if err := pm.Start(p.id); err != nil {
-				// Projects with no startup_command/service_name are pure
-				// datasources — nothing to restart, no alarm needed.
-				if strings.Contains(err.Error(), "no service_name") {
-					continue
-				}
-				log.Printf("health: %s restart failed: %v", p.name, err)
-				// Alert cooldown: a crash-looping process must not insert a
-				// notification every 30s (R12 perf review).
-				if time.Since(lastAlert[p.id]) > 10*time.Minute {
-					lastAlert[p.id] = time.Now()
-					nid := fmt.Sprintf("n%d", time.Now().UnixNano())
-					db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "alert", "进程异常", fmt.Sprintf("「%s」进程意外退出，自动重启失败: %v", p.name, err))
-				}
-				continue
-			}
-			nid := fmt.Sprintf("n%d", time.Now().UnixNano())
-			db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())", nid, p.id, "info", "进程恢复", fmt.Sprintf("「%s」进程已自动重启", p.name))
-		}
-		// Shared services: referenced (refs>0) but not running → restart.
-		pm.mu.RLock()
-		shared := make([]*svcState, 0, len(pm.services))
-		for _, st := range pm.services {
-			if len(st.refs) > 0 {
-				shared = append(shared, st)
-			}
-		}
-		pm.mu.RUnlock()
-		for _, st := range shared {
-			if pm.serviceRunning(st) {
-				continue
-			}
-			log.Printf("health: shared service %s down, restarting", st.name)
-			if err := pm.startShared(st); err != nil {
-				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
-					fmt.Sprintf("n%d", time.Now().UnixNano()), "", "alert", "共享服务异常", fmt.Sprintf("「%s」重启失败: %v", st.name, err))
-			} else {
-				db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
-					fmt.Sprintf("n%d", time.Now().UnixNano()), "", "info", "共享服务恢复", fmt.Sprintf("「%s」已自动重启", st.name))
-			}
-		}
+		pm.healthOnce(enabled)
 	}
 }
 

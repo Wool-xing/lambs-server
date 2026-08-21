@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"lambs-server-go/internal/db"
 )
@@ -13,9 +14,10 @@ import (
 // tests can't pollute ProcMgr's state.
 func newTestPM() *ProcManager {
 	return &ProcManager{
-		procs:    make(map[string]*procState),
-		services: make(map[string]*svcState),
-		samples:  make(map[string]cpuSample),
+		procs:     make(map[string]*procState),
+		services:  make(map[string]*svcState),
+		samples:   make(map[string]cpuSample),
+		lastAlert: make(map[string]time.Time),
 	}
 }
 
@@ -179,5 +181,110 @@ func TestAttachDetachServicesRoundTrip(t *testing.T) {
 	pm.mu.Unlock()
 	if gone {
 		t.Error("service still registered after last detach")
+	}
+}
+
+// TestHealthOnceDisabled — enabled=false is a no-op before any DB access
+// (the monitor loop is untestable; the extracted pass is).
+func TestHealthOnceDisabled(t *testing.T) {
+	lazyDB(t)
+	newTestPM().healthOnce(func() bool { return false })
+}
+
+// TestHealthOnceDBDown — DB failure degrades to a silent skip, never a panic.
+func TestHealthOnceDBDown(t *testing.T) {
+	lazyDB(t)
+	newTestPM().healthOnce(func() bool { return true })
+}
+
+// TestHealthOnceRestartsDownProject — env-gated PG: an online project with a
+// startup_command but no tracked process gets restarted (start_cmd "true")
+// and a 进程恢复 notification is inserted. The 10-minute alert cooldown is
+// also exercised: a second pass for a failing project stays silent.
+func TestHealthOnceRestartsDownProject(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	// Full schema (round-9 CI lesson) + notifications fixture.
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (
+		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT,
+		icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0,
+		status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false,
+		icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT,
+		startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT,
+		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
+		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
+		updated_at TIMESTAMPTZ DEFAULT now(),
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`DROP TABLE IF EXISTS notifications`)
+	mustExec(`CREATE TABLE notifications (id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT, content TEXT, is_read BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT now())`)
+	mustExec(`INSERT INTO projects (id, name, status, startup_command) VALUES
+		('health-down', 'down', 'online', 'true'),
+		('health-bad', 'bad', 'online', 'nonexistent-cmd-xyz')`)
+
+	pm := newTestPM()
+	pm.healthOnce(func() bool { return true })
+
+	var n int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE project_id='health-down' AND title='进程恢复'").Scan(&n); err != nil || n != 1 {
+		t.Errorf("health-down 恢复通知 = %d (%v), want 1", n, err)
+	}
+	// health-bad fails to start → 进程异常 alert (cooldown allows the first).
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE project_id='health-bad' AND title='进程异常'").Scan(&n); err != nil || n != 1 {
+		t.Errorf("health-bad 异常通知 = %d (%v), want 1", n, err)
+	}
+	// Second pass inside the cooldown: no duplicate alert for health-bad.
+	pm.healthOnce(func() bool { return true })
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE project_id='health-bad' AND title='进程异常'").Scan(&n); err != nil || n != 1 {
+		t.Errorf("cooldown 后异常通知 = %d (%v), want still 1", n, err)
+	}
+	// health-down's "true" process exited by now — Status flips back to
+	// down and the next pass restarts it again: 进程恢复 count grows.
+	time.Sleep(300 * time.Millisecond)
+	pm.healthOnce(func() bool { return true })
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE project_id='health-down' AND title='进程恢复'").Scan(&n); err != nil || n < 1 {
+		t.Errorf("health-down 再次恢复通知 = %d (%v)", n, err)
+	}
+}
+
+// TestHealthOnceRestartsSharedService — env-gated: a referenced shared
+// service that is not running gets restarted and a 共享服务恢复
+// notification lands.
+func TestHealthOnceRestartsSharedService(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS notifications`)
+	mustExec(`CREATE TABLE notifications (id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT, content TEXT, is_read BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT now())`)
+
+	pm := newTestPM()
+	pm.mu.Lock()
+	pm.services["svc-health"] = &svcState{name: "svc-health", startCmd: "true", stopCmd: "true", refs: map[string]bool{"p": true}}
+	pm.mu.Unlock()
+
+	pm.healthOnce(func() bool { return true })
+
+	var n int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE title='共享服务恢复'").Scan(&n); err != nil || n != 1 {
+		t.Errorf("共享服务恢复通知 = %d (%v), want 1", n, err)
 	}
 }
