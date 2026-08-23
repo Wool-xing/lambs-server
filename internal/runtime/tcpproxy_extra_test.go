@@ -191,3 +191,24 @@ func TestTCPProxyStartBranches(t *testing.T) {
 		t.Errorf("conflict Start err = %v, want listen refusal", err)
 	}
 }
+
+// TestIdleOnceDegradedPaths — the extracted idle pass survives both a down
+// DB and a busy connection (the deeper stop branch needs a genuinely
+// running ProcManager project, which no test can fake without spawning).
+func TestIdleOnceDegradedPaths(t *testing.T) {
+	lazyDB(t)
+	tp := newTestTCPProxy()
+	tp.idleOnce() // empty registry: no-op
+
+	var active int64 = 1
+	tp.mu.Lock()
+	tp.actives["busy"] = &active
+	tp.mu.Unlock()
+	tp.idleOnce() // busy counter: skip, no panic
+
+	var idle int64
+	tp.mu.Lock()
+	tp.actives["idle"] = &idle
+	tp.mu.Unlock()
+	tp.idleOnce() // idle but Status reports not-running on the lazy DB: skip
+}
