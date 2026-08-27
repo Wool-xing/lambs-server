@@ -33,8 +33,12 @@ func UpdateConfig(w http.ResponseWriter, r *http.Request, cfg *models.Config) {
 		return
 	}
 	// Never accept secrets from API — these come from env/config file
-	if incoming.JWTSecret != "" { incoming.JWTSecret = "" }
-	if incoming.SMTPPassword != "" { incoming.SMTPPassword = "" }
+	if incoming.JWTSecret != "" {
+		incoming.JWTSecret = ""
+	}
+	if incoming.SMTPPassword != "" {
+		incoming.SMTPPassword = ""
+	}
 	// Only apply safe fields
 	cfg.AdminEmail = incoming.AdminEmail
 	cfg.Port = incoming.Port
@@ -132,27 +136,60 @@ func ExportProjectUsers(w http.ResponseWriter, r *http.Request, id string) {
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 	if strings.Contains(dsn, "sqlite") {
 		dsn2 := strings.TrimPrefix(strings.TrimPrefix(dsn, "sqlite:///"), "sqlite://")
-		if idx := strings.Index(dsn2, "?"); idx >= 0 { dsn2 = dsn2[:idx] }
+		if idx := strings.Index(dsn2, "?"); idx >= 0 {
+			dsn2 = dsn2[:idx]
+		}
 		for _, table := range []string{"users", "user", "accounts", "member"} {
 			cmd := exec.Command(execpath.Path("sqlite3"), "-header", "-csv", dsn2, fmt.Sprintf("SELECT * FROM %s;", table))
-			var out bytes.Buffer; cmd.Stdout = &out
-			if err := cmd.Run(); err != nil || out.Len() == 0 { continue }
-			var filtered bytes.Buffer; header := true; var pwCols []int
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			if err := cmd.Run(); err != nil || out.Len() == 0 {
+				continue
+			}
+			var filtered bytes.Buffer
+			header := true
+			var pwCols []int
 			for _, line := range strings.Split(out.String(), "\n") {
 				fields := strings.Split(line, ",")
-				if header { for i, f := range fields { lf := strings.ToLower(f); if strings.Contains(lf, "password") || strings.Contains(lf, "token") || strings.Contains(lf, "hash") { pwCols = append(pwCols, i) } }; header = false }
+				if header {
+					for i, f := range fields {
+						lf := strings.ToLower(f)
+						if strings.Contains(lf, "password") || strings.Contains(lf, "token") || strings.Contains(lf, "hash") {
+							pwCols = append(pwCols, i)
+						}
+					}
+					header = false
+				}
 				var row []string
-				for i, f := range fields { skip := false; for _, ci := range pwCols { if i == ci { skip = true; break } }; if !skip { row = append(row, f) } }
-				if len(row) > 0 { filtered.WriteString(strings.Join(row, ",") + "\n") }
+				for i, f := range fields {
+					skip := false
+					for _, ci := range pwCols {
+						if i == ci {
+							skip = true
+							break
+						}
+					}
+					if !skip {
+						row = append(row, f)
+					}
+				}
+				if len(row) > 0 {
+					filtered.WriteString(strings.Join(row, ",") + "\n")
+				}
 			}
-			w.Write(filtered.Bytes()); return
+			w.Write(filtered.Bytes())
+			return
 		}
-		w.Write([]byte("No user table found\n")); return
+		w.Write([]byte("No user table found\n"))
+		return
 	}
 	users := db.SyncUserData(dsn)
 	cw := csv.NewWriter(w)
 	if len(users) > 0 {
-		var cols []string; for k := range users[0] { cols = append(cols, k) }
+		var cols []string
+		for k := range users[0] {
+			cols = append(cols, k)
+		}
 		cw.Write(cols)
 		for _, row := range users {
 			vals := make([]string, len(cols))
@@ -171,26 +208,71 @@ func ExportProjectUsers(w http.ResponseWriter, r *http.Request, id string) {
 	cw.Flush()
 }
 
+// maskDSN hides the password of URL-form DSNs for display payloads
+// (settings page DOM, screenshots, browser extensions all read it):
+// mysql://u:pw@h/d → mysql://u:***@h/d. Local-file forms and passwordless
+// DSNs pass through. Manual splice, not url.UserPassword — url.String()
+// percent-encodes the *** marker into %2A%2A%2A.
+func maskDSN(dsn string) string {
+	if dsn == "" || dsn == "—" || strings.HasPrefix(dsn, "sqlite") {
+		return dsn
+	}
+	at := strings.LastIndex(dsn, "@")
+	if at <= 0 {
+		return dsn
+	}
+	// Password starts at the FIRST ":" after the scheme — a password
+	// containing ":" or "@" must not leak its prefix (review finding).
+	schemeEnd := strings.Index(dsn, "://")
+	if schemeEnd < 0 {
+		return dsn
+	}
+	userinfo := dsn[schemeEnd+3 : at]
+	if i := strings.Index(userinfo, ":"); i >= 0 {
+		return dsn[:schemeEnd+3+i+1] + "***" + dsn[at:]
+	}
+	return dsn // no password present
+}
+
 func Datasources(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.Query("SELECT id, name, repo, stack, db_type, COALESCE(dsn,'—'), status FROM projects ORDER BY name")
-	if err != nil { auth.JSONOK(w, map[string]interface{}{"datasources": []interface{}{}}); return }
+	if err != nil {
+		auth.JSONOK(w, map[string]interface{}{"datasources": []interface{}{}})
+		return
+	}
 	defer rows.Close()
 	var ds []map[string]interface{}
-	for rows.Next() { var id, name, repo, stack, dbType, dsn, status string; rows.Scan(&id, &name, &repo, &stack, &dbType, &dsn, &status); ds = append(ds, map[string]interface{}{"id": id, "name": name, "repo": repo, "stack": stack, "db_type": dbType, "dsn": dsn, "status": status}) }
+	for rows.Next() {
+		var id, name, repo, stack, dbType, dsn, status string
+		rows.Scan(&id, &name, &repo, &stack, &dbType, &dsn, &status)
+		ds = append(ds, map[string]interface{}{"id": id, "name": name, "repo": repo, "stack": stack, "db_type": dbType, "dsn": maskDSN(dsn), "status": status})
+	}
 	auth.JSONOK(w, map[string]interface{}{"datasources": ds})
 }
 
 func AuditLogs(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	if page < 1 { page = 1 }
-	if pageSize < 1 || pageSize > 200 { pageSize = 50 }
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 50
+	}
 	offset := (page - 1) * pageSize
-	var total int; db.DB.QueryRow("SELECT COUNT(*) FROM audit_logs").Scan(&total)
+	var total int
+	db.DB.QueryRow("SELECT COUNT(*) FROM audit_logs").Scan(&total)
 	rows, err := db.DB.Query("SELECT id, user_id, action, target, detail, created_at::text FROM audit_logs ORDER BY id DESC LIMIT $1 OFFSET $2", pageSize, offset)
-	if err != nil { auth.JSONOK(w, map[string]interface{}{"logs": []models.AuditLog{}, "total": 0, "page": page, "page_size": pageSize}); return }
+	if err != nil {
+		auth.JSONOK(w, map[string]interface{}{"logs": []models.AuditLog{}, "total": 0, "page": page, "page_size": pageSize})
+		return
+	}
 	defer rows.Close()
 	logs := []models.AuditLog{}
-	for rows.Next() { var l models.AuditLog; rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Target, &l.Detail, &l.CreatedAt); logs = append(logs, l) }
+	for rows.Next() {
+		var l models.AuditLog
+		rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Target, &l.Detail, &l.CreatedAt)
+		logs = append(logs, l)
+	}
 	auth.JSONOK(w, map[string]interface{}{"logs": logs, "total": total, "page": page, "page_size": pageSize})
 }
