@@ -110,24 +110,52 @@ func mustID(t *testing.T, username string) string {
 func TestNewMuxRouteSweep(t *testing.T) {
 	ts := httptest.NewServer(newMux())
 	defer ts.Close()
-	routes := []string{
-		"/api/auth/login", "/api/auth/salt", "/api/health", "/api/gate/check-internal",
-		"/api/gate/offline-page", "/api/gate/project-logo", "/api/projects/x/logo",
-		"/api/auth/register", "/api/auth/forgot-password/request",
-		"/api/auth/forgot-password/verify", "/api/auth/me", "/api/me",
-		"/api/auth/me/password", "/api/projects", "/api/projects/stats",
-		"/api/projects/x", "/api/projects/reorder", "/api/projects/x/test-connection",
-		"/api/projects/x/sync", "/api/projects/refresh-all", "/api/projects/x/logs",
-		"/api/projects/x/tables", "/api/projects/x/tables/list", "/api/projects/x/data/row",
+	// Full registration table (method + path), params replaced with "x".
+	// The contract: every route answers through the real mux + gate without
+	// a 500 panic. Codes vary by gate/validation.
+	routes := []struct{ method, path string }{
+		{"POST", "/api/auth/login"}, {"GET", "/api/auth/salt"}, {"GET", "/api/health"},
+		{"GET", "/api/gate/check-internal"}, {"GET", "/api/gate/offline-page"},
+		{"GET", "/api/gate/project-logo"}, {"GET", "/api/projects/x/logo"},
+		{"POST", "/api/auth/register"}, {"POST", "/api/auth/forgot-password/request"},
+		{"POST", "/api/auth/forgot-password/verify"}, {"GET", "/api/auth/me"},
+		{"GET", "/api/me"}, {"PUT", "/api/auth/me/password"},
+		{"GET", "/api/projects"}, {"GET", "/api/projects/stats"}, {"GET", "/api/projects/x"},
+		{"POST", "/api/projects"}, {"PUT", "/api/projects/x"}, {"DELETE", "/api/projects/x"},
+		{"PATCH", "/api/projects/x/status"}, {"PATCH", "/api/projects/x/pin"},
+		{"PATCH", "/api/projects/reorder"}, {"POST", "/api/projects/x/test-connection"},
+		{"POST", "/api/projects/x/sync"}, {"POST", "/api/projects/refresh-all"},
+		{"GET", "/api/projects/x/logs"}, {"GET", "/api/projects/x/tables"},
+		{"GET", "/api/projects/x/tables/list"}, {"PUT", "/api/projects/x/data/row"},
+		{"DELETE", "/api/projects/x/data/row"}, {"POST", "/api/projects/x/data/row"},
+		{"GET", "/api/projects/x/members"}, {"POST", "/api/projects/x/members"},
+		{"DELETE", "/api/projects/x/members/x"}, {"POST", "/api/projects/x/clone"},
+		{"POST", "/api/projects/x/vector-search"},
+		{"GET", "/api/users"}, {"POST", "/api/users"}, {"PUT", "/api/users/x"},
+		{"DELETE", "/api/users/x"}, {"POST", "/api/users/x/reset-password"},
+		{"GET", "/api/gate/check"}, {"GET", "/api/settings/config"},
+		{"PUT", "/api/settings/config"}, {"GET", "/api/settings/export/projects"},
+		{"GET", "/api/settings/export/users"}, {"GET", "/api/settings/export/project-users/x"},
+		{"GET", "/api/settings/audit-logs"}, {"GET", "/api/settings/datasources"},
+		{"POST", "/api/backups/x"}, {"GET", "/api/backups/x"},
+		{"GET", "/api/backups/x/download/x.db"}, {"DELETE", "/api/backups/x/download/x.db"},
+		{"POST", "/api/backups/x/restore/x.db"}, {"POST", "/api/backups/x/upload-tg/x.db"},
+		{"GET", "/api/notifications"}, {"POST", "/api/notifications/x/read"},
+		{"POST", "/api/notifications/read-all"}, {"DELETE", "/api/notifications/x"},
+		{"GET", "/api/system/health"},
 	}
-	for _, path := range routes {
-		resp, err := http.Get(ts.URL + path)
+	for _, rt := range routes {
+		req, err := http.NewRequest(rt.method, ts.URL+rt.path, nil)
 		if err != nil {
-			t.Fatalf("GET %s: %v", path, err)
+			t.Fatalf("%s %s: %v", rt.method, rt.path, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", rt.method, rt.path, err)
 		}
 		resp.Body.Close()
 		if resp.StatusCode == 500 {
-			t.Fatalf("GET %s panicked (500)", path)
+			t.Fatalf("%s %s panicked (500)", rt.method, rt.path)
 		}
 	}
 }
