@@ -81,7 +81,7 @@ jobs:
           TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           # Gate at the current level: new code must not drag coverage down
           # (raise the bar as the sprint lands; round-7 calibration item).
-          THRESHOLD=48.5
+          THRESHOLD=51.0
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)"
           if awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}"; then
