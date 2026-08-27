@@ -75,23 +75,26 @@ func pollNode(name, url string) NodeSnapshot {
 	return n
 }
 
+// nodePollOnce is one monitor pass — extracted so the poll/write cycle is
+// testable without the never-returning monitor goroutine.
+func nodePollOnce() {
+	n := pollNode("wool", woolAgentURL())
+	woolMu.Lock()
+	woolNode = n
+	woolMu.Unlock()
+	a := pollNode("windows-agent", agentURL+"/health")
+	agentMu.Lock()
+	agentNode = a
+	agentMu.Unlock()
+}
+
 // StartNodeMonitor polls wool and the Windows compute agent on a 30s
 // ticker. Never returns.
 func StartNodeMonitor() {
-	poll := func() {
-		n := pollNode("wool", woolAgentURL())
-		woolMu.Lock()
-		woolNode = n
-		woolMu.Unlock()
-		a := pollNode("windows-agent", agentURL+"/health")
-		agentMu.Lock()
-		agentNode = a
-		agentMu.Unlock()
-	}
-	poll()
+	nodePollOnce()
 	go func() {
 		for range time.Tick(30 * time.Second) {
-			poll()
+			nodePollOnce()
 		}
 	}()
 }

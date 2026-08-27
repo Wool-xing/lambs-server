@@ -180,36 +180,43 @@ func StartTaskRun(id string) error {
 	return nil
 }
 
+// cronTickOnce is one scheduler pass — extracted so the tick logic is
+// testable without the never-returning scheduler goroutine. lastFired is the
+// per-task "already fired this minute" guard, owned by the caller.
+func cronTickOnce(lastFired map[string]time.Time) {
+	rows, err := db.DB.Query("SELECT id, project_id, name, command, host, cron FROM scheduled_tasks WHERE enabled")
+	if err != nil {
+		return
+	}
+	type t struct{ id, project, name, command, host, cron string }
+	var due []t
+	for rows.Next() {
+		var e t
+		rows.Scan(&e.id, &e.project, &e.name, &e.command, &e.host, &e.cron)
+		due = append(due, e)
+	}
+	rows.Close()
+	nowMin := time.Now().Truncate(time.Minute)
+	for _, e := range due {
+		spec, err := parseCron(e.cron)
+		if err != nil || !spec.matches(nowMin) {
+			continue
+		}
+		if lastFired[e.id] == nowMin {
+			continue
+		}
+		lastFired[e.id] = nowMin
+		go executeTask(e.id, e.project, e.name, e.command, e.host)
+	}
+}
+
 // StartCronScheduler fires due tasks every 30s. A task fires when its cron
 // matches the current minute and it has not fired in that minute yet.
 func StartCronScheduler() {
 	lastFired := map[string]time.Time{}
 	go func() {
 		for range time.Tick(30 * time.Second) {
-			rows, err := db.DB.Query("SELECT id, project_id, name, command, host, cron FROM scheduled_tasks WHERE enabled")
-			if err != nil {
-				continue
-			}
-			type t struct{ id, project, name, command, host, cron string }
-			var due []t
-			for rows.Next() {
-				var e t
-				rows.Scan(&e.id, &e.project, &e.name, &e.command, &e.host, &e.cron)
-				due = append(due, e)
-			}
-			rows.Close()
-			nowMin := time.Now().Truncate(time.Minute)
-			for _, e := range due {
-				spec, err := parseCron(e.cron)
-				if err != nil || !spec.matches(nowMin) {
-					continue
-				}
-				if lastFired[e.id] == nowMin {
-					continue
-				}
-				lastFired[e.id] = nowMin
-				go executeTask(e.id, e.project, e.name, e.command, e.host)
-			}
+			cronTickOnce(lastFired)
 		}
 	}()
 }
