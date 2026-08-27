@@ -86,6 +86,26 @@ func TestValidateKeyAndStr(t *testing.T) {
 	}
 }
 
+func TestDBMaxConns(t *testing.T) {
+	// default when unset / invalid / non-positive
+	t.Setenv("LAMBS_DB_MAX_CONNS", "")
+	if got := dbMaxConns(); got != 30 {
+		t.Errorf("default = %d, want 30", got)
+	}
+	t.Setenv("LAMBS_DB_MAX_CONNS", "64")
+	if got := dbMaxConns(); got != 64 {
+		t.Errorf("override = %d, want 64", got)
+	}
+	t.Setenv("LAMBS_DB_MAX_CONNS", "abc")
+	if got := dbMaxConns(); got != 30 {
+		t.Errorf("invalid = %d, want 30", got)
+	}
+	t.Setenv("LAMBS_DB_MAX_CONNS", "0")
+	if got := dbMaxConns(); got != 30 {
+		t.Errorf("zero = %d, want 30", got)
+	}
+}
+
 func TestNewUUIDv4(t *testing.T) {
 	a, b := newUUIDv4(), newUUIDv4()
 	if len(a) != 36 || a == b {
