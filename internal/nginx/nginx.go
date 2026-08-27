@@ -86,33 +86,40 @@ func pushConfig(conf string) error {
 // Counts run concurrently (semaphore-capped) — the old serial loop let one
 // unreachable DB stall the whole round for its dial timeout (R13 perf).
 func AutoRefresh() {
-	sem := make(chan struct{}, 8)
 	for {
 		time.Sleep(1 * time.Minute)
-		rows, err := db.DB.Query("SELECT id, dsn FROM projects WHERE dsn IS NOT NULL AND dsn != '' AND dsn != '—'")
-		if err != nil {
-			continue
-		}
-		type job struct{ id, dsn string }
-		var jobs []job
-		for rows.Next() {
-			var id, dsn string
-			rows.Scan(&id, &dsn)
-			jobs = append(jobs, job{id, dsn})
-		}
-		rows.Close()
-		var wg sync.WaitGroup
-		for _, j := range jobs {
-			wg.Add(1)
-			go func(j job) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				refreshOne(j.id, j.dsn)
-			}(j)
-		}
-		wg.Wait()
+		autoRefreshOnce()
 	}
+}
+
+// autoRefreshOnce runs one refresh round. Extracted from the loop so the
+// scheduling is testable without waiting a minute — same pattern as
+// healthOnce/idleOnce in runtime.
+func autoRefreshOnce() {
+	sem := make(chan struct{}, 8)
+	rows, err := db.DB.Query("SELECT id, dsn FROM projects WHERE dsn IS NOT NULL AND dsn != '' AND dsn != '—'")
+	if err != nil {
+		return
+	}
+	type job struct{ id, dsn string }
+	var jobs []job
+	for rows.Next() {
+		var id, dsn string
+		rows.Scan(&id, &dsn)
+		jobs = append(jobs, job{id, dsn})
+	}
+	rows.Close()
+	var wg sync.WaitGroup
+	for _, j := range jobs {
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			refreshOne(j.id, j.dsn)
+		}(j)
+	}
+	wg.Wait()
 }
 
 // refreshOne updates one project's user count and 用户数 feature.

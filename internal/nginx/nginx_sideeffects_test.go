@@ -2,6 +2,8 @@ package nginx
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +126,67 @@ func TestSyncRetries(t *testing.T) {
 // TestRefreshOne — user count lands on users_count and the 用户数 feature is
 // appended when absent / updated when present. dsn '—' exercises the
 // zero-count path without a live datasource.
+// TestAutoRefreshOnce — one refresh round: real sqlite count lands in
+// users_count; guard-rejected DSN resolves to 0; '—' DSN rows are excluded
+// from the job query entirely (stay at seeded value); jobs run under the
+// semaphore without deadlock.
+func TestAutoRefreshOnce(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	bin := ""
+	if p := os.Getenv("LAMBS_SQLITE3_PATH"); p != "" {
+		bin = p
+	} else if p, err := exec.LookPath("sqlite3"); err == nil {
+		bin = p
+	} else {
+		t.Skip("sqlite3 CLI not found — set LAMBS_SQLITE3_PATH to run")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	src := filepath.Join(t.TempDir(), "ar.db")
+	cmd := exec.Command(bin, src, "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users(name) VALUES ('a'),('b');")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("seed: %v (%s)", err, out)
+	}
+	sqliteDSN := "sqlite:///" + filepath.ToSlash(src)
+	mustExec(`DELETE FROM projects WHERE id IN ('ngx-ar-sq','ngx-ar-dash','ngx-ar-guard')`)
+	mustExec(`INSERT INTO projects (id, name, dsn, users_count, features) VALUES
+		('ngx-ar-sq','SQLite项目',$1,-1,'[]'),
+		('ngx-ar-dash','无数据源','—',-1,'[]'),
+		('ngx-ar-guard','被拦项目','postgres://u:p@10.1.2.3/db',-1,'[]')`, sqliteDSN)
+	defer mustExec(`DELETE FROM projects WHERE id IN ('ngx-ar-sq','ngx-ar-dash','ngx-ar-guard')`)
+
+	autoRefreshOnce()
+
+	var cSq, cDash, cGuard int
+	db.DB.QueryRow("SELECT users_count FROM projects WHERE id='ngx-ar-sq'").Scan(&cSq)
+	db.DB.QueryRow("SELECT users_count FROM projects WHERE id='ngx-ar-dash'").Scan(&cDash)
+	db.DB.QueryRow("SELECT users_count FROM projects WHERE id='ngx-ar-guard'").Scan(&cGuard)
+	if cSq != 2 {
+		t.Errorf("sqlite count = %d, want 2", cSq)
+	}
+	if cDash != -1 {
+		t.Errorf("dash count = %d, want -1 (dsn='—' rows are excluded from the job query)", cDash)
+	}
+	if cGuard != 0 {
+		t.Errorf("guard-rejected count = %d, want 0", cGuard)
+	}
+	// features gain the 用户数 entry via refreshOne
+	var ok bool
+	db.DB.QueryRow("SELECT features @> '[{\"label\":\"用户数\",\"value\":2}]'::jsonb FROM projects WHERE id='ngx-ar-sq'").Scan(&ok)
+	if !ok {
+		t.Error("sqlite project features missing 用户数=2")
+	}
+}
+
 func TestRefreshOne(t *testing.T) {
 	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
 	if dsn == "" {
