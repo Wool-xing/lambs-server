@@ -81,10 +81,39 @@ jobs:
           TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           # Gate at the current level: new code must not drag coverage down
           # (raise the bar as the sprint lands; round-7 calibration item).
-          THRESHOLD=51.0
+          THRESHOLD=53.5
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)"
           if awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}"; then
             echo "coverage regressed below ${THRESHOLD}%"
             exit 1
           fi
+      - name: Per-package coverage floor (candidate 4)
+        run: |
+          # 单包最低线：有测试的包低于 40% 即红（QA 第 10 轮落账候选 4）。
+          # 无测试文件的包（如 internal/models）不出现在 coverage.out，天然豁免。
+          python3 - <<'EOF'
+          import collections, sys
+          tot = collections.defaultdict(int)
+          cov = collections.defaultdict(int)
+          for line in open('coverage.out'):
+              line = line.strip()
+              if not line or line.startswith('mode:'):
+                  continue
+              pos, num, cnt = line.rsplit(' ', 2)
+              pkg = pos.rsplit('/', 1)[0] if '/' in pos else pos
+              tot[pkg] += int(num)
+              if int(cnt) > 0:
+                  cov[pkg] += int(num)
+          floor = 40.0
+          bad = []
+          for pkg in sorted(tot):
+              pct = 100 * cov[pkg] / tot[pkg]
+              print(f"{pkg}: {pct:.1f}%")
+              if pct < floor:
+                  bad.append(pkg)
+          if bad:
+              print(f"per-package floor {floor}% violated: {bad}")
+              sys.exit(1)
+          print(f"per-package floor {floor}%: OK ({len(tot)} packages)")
+          EOF
