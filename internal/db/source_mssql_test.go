@@ -35,6 +35,21 @@ func TestMSSQLGoDSN(t *testing.T) {
 			dsn:  "mssql://sa:p%40ss%3Aw@h/db",
 			want: "sqlserver://sa:p%40ss%3Aw@h?database=db&dial+timeout=10&encrypt=true&trustservercertificate=true",
 		},
+		{
+			name: "no path still carries an empty database param",
+			dsn:  "mssql://sa:pw@h",
+			want: "sqlserver://sa:pw@h?database=&dial+timeout=10&encrypt=true&trustservercertificate=true",
+		},
+		{
+			name: "passwordless user",
+			dsn:  "mssql://sa@h/db",
+			want: "sqlserver://sa@h?database=db&dial+timeout=10&encrypt=true&trustservercertificate=true",
+		},
+		{
+			name: "dial timeout 0 is forced to the 10s default",
+			dsn:  "mssql://sa:pw@h/db?dial%20timeout=0",
+			want: "sqlserver://sa:pw@h?database=db&dial+timeout=10&encrypt=true&trustservercertificate=true",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -388,6 +388,22 @@ func handleProjectLogs(w http.ResponseWriter, r *http.Request, id string) {
 	auth.JSONOK(w, map[string]interface{}{"logs": all[start:]})
 }
 
+// cleanupOldData enforces retention: notifications older than 30 days and
+// audit logs older than 90 days are deleted. Extracted from the main() loop
+// (which runs it hourly) so the SQL is testable against a real database.
+func cleanupOldData() {
+	if r, err := db.DB.Exec("DELETE FROM notifications WHERE created_at < NOW() - INTERVAL '30 days'"); err == nil {
+		if n, _ := r.RowsAffected(); n > 0 {
+			log.Printf("cleanup: removed %d notifications older than 30 days", n)
+		}
+	}
+	if r, err := db.DB.Exec("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '90 days'"); err == nil {
+		if n, _ := r.RowsAffected(); n > 0 {
+			log.Printf("cleanup: removed %d audit logs older than 90 days", n)
+		}
+	}
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
@@ -460,16 +476,7 @@ func main() {
 	go func() {
 		time.Sleep(30 * time.Second)
 		for {
-			if r, err := db.DB.Exec("DELETE FROM notifications WHERE created_at < NOW() - INTERVAL '30 days'"); err == nil {
-				if n, _ := r.RowsAffected(); n > 0 {
-					log.Printf("cleanup: removed %d notifications older than 30 days", n)
-				}
-			}
-			if r, err := db.DB.Exec("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '90 days'"); err == nil {
-				if n, _ := r.RowsAffected(); n > 0 {
-					log.Printf("cleanup: removed %d audit logs older than 90 days", n)
-				}
-			}
+			cleanupOldData()
 			time.Sleep(1 * time.Hour)
 		}
 	}()

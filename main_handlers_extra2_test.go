@@ -142,7 +142,15 @@ func TestNewMuxRouteSweep(t *testing.T) {
 		{"POST", "/api/backups/x/restore/x.db"}, {"POST", "/api/backups/x/upload-tg/x.db"},
 		{"GET", "/api/notifications"}, {"POST", "/api/notifications/x/read"},
 		{"POST", "/api/notifications/read-all"}, {"DELETE", "/api/notifications/x"},
-		{"GET", "/api/system/health"},
+		{"GET", "/api/system/health"}, {"GET", "/api/logs/aggregated"},
+		{"GET", "/api/logs/system"}, {"GET", "/api/projects/x/tasks"},
+		{"POST", "/api/projects/x/tasks"}, {"PUT", "/api/tasks/x"},
+		{"DELETE", "/api/tasks/x"}, {"POST", "/api/tasks/x/run"},
+		{"POST", "/api/runtime/detect"}, {"GET", "/api/runtime/local-services"},
+		{"POST", "/api/runtime/ports/allocate/x"}, {"POST", "/api/runtime/proc/start/x"},
+		{"POST", "/api/runtime/proc/stop/x"}, {"POST", "/api/runtime/proc/restart/x"},
+		{"GET", "/api/runtime/proc/status/x"}, {"GET", "/api/runtime/proc/list"},
+		{"POST", "/api/runtime/proxy/start/x"}, {"POST", "/api/runtime/proxy/stop/x"},
 	}
 	for _, rt := range routes {
 		req, err := http.NewRequest(rt.method, ts.URL+rt.path, nil)

@@ -128,3 +128,85 @@ func TestNextAfterStepDow(t *testing.T) {
 		t.Errorf("nextAfter = %v, want %v", got, want)
 	}
 }
+
+// TestCronMatchesTable — matches() semantics, pinned to real 2026-08 dates
+// (08-18 is Tuesday, 08-15 Saturday): standard cron OR rule when both dom and
+// dow are restricted; single restriction wins; unrestricted stars match all.
+func TestCronMatchesTable(t *testing.T) {
+	cases := []struct {
+		name string
+		expr string
+		at   time.Time
+		want bool
+	}{
+		{"all stars", "* * * * *", at(2026, 8, 18, 12, 30), true},
+		{"minute only", "30 12 * * *", at(2026, 8, 18, 12, 30), true},
+		{"minute mismatch", "30 12 * * *", at(2026, 8, 18, 12, 31), false},
+		{"hour mismatch", "30 12 * * *", at(2026, 8, 18, 11, 30), false},
+		{"dom only hits", "0 0 15 * *", at(2026, 8, 15, 0, 0), true},
+		{"dom only misses", "0 0 15 * *", at(2026, 8, 18, 0, 0), false},
+		{"dow only hits", "0 0 * * 2", at(2026, 8, 18, 0, 0), true},  // Tue
+		{"dow only misses", "0 0 * * 2", at(2026, 8, 15, 0, 0), false}, // Sat
+		{"both restricted, dom side", "0 0 15 * 2", at(2026, 8, 15, 0, 0), true},
+		{"both restricted, dow side", "0 0 15 * 2", at(2026, 8, 18, 0, 0), true},
+		{"both restricted, neither", "0 0 15 * 2", at(2026, 8, 19, 0, 0), false}, // Wed
+		{"both restricted, both match", "0 0 18 * 2", at(2026, 8, 18, 0, 0), true},
+		{"month restrict hits", "0 0 1 8 *", at(2026, 8, 1, 0, 0), true},
+		{"month restrict misses", "0 0 1 8 *", at(2026, 9, 1, 0, 0), false},
+	}
+	for _, c := range cases {
+		s := mustParse(t, c.expr)
+		if got := s.matches(c.at); got != c.want {
+			t.Errorf("%s: matches(%q @ %v) = %v, want %v", c.name, c.expr, c.at, got, c.want)
+		}
+	}
+}
+
+// TestParseCronFieldBoundaries — the single-field parser: unrestricted flag
+// for stars, values for single/list/range/step, and the full invalid matrix
+// (bad step, empty bounds, reversed range, out-of-range).
+func TestParseCronFieldBoundaries(t *testing.T) {
+	valid := []struct {
+		spec       string
+		min, max   int
+		restricted bool
+		probe      int // a value that must be set after parse
+	}{
+		{"*", 0, 59, false, 30},
+		{"5", 0, 59, true, 5},
+		{"1,3,5", 0, 59, true, 3},
+		{"10-20", 0, 59, true, 15},
+		{"*/10", 0, 59, false, 40},
+		{"1-5/2", 0, 6, true, 3},
+		{"0,30", 0, 59, true, 30},
+	}
+	for _, c := range valid {
+		f, restricted, err := parseCronField(c.spec, c.min, c.max)
+		if err != nil {
+			t.Errorf("parseCronField(%q) err = %v, want ok", c.spec, err)
+			continue
+		}
+		if restricted != c.restricted {
+			t.Errorf("parseCronField(%q) restricted = %v, want %v", c.spec, restricted, c.restricted)
+		}
+		if !f.values[c.probe-c.min] {
+			t.Errorf("parseCronField(%q) missing value %d", c.spec, c.probe)
+		}
+	}
+	invalid := []struct{ spec string; min, max int }{
+		{"*/0", 0, 59},
+		{"1-", 0, 59},
+		{"-5", 0, 59},
+		{"0-60", 0, 59},
+		{"5-3", 0, 59},
+		{"abc", 0, 59},
+		{"61", 0, 59},
+		{"a-b", 0, 59},
+		{"7/2", 0, 6},
+	}
+	for _, c := range invalid {
+		if _, _, err := parseCronField(c.spec, c.min, c.max); err == nil {
+			t.Errorf("parseCronField(%q) = ok, want error", c.spec)
+		}
+	}
+}

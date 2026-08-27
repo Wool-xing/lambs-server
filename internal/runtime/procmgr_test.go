@@ -1,6 +1,9 @@
 package runtime
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestFilterEnv — managed project processes must not inherit Lambs's own
 // credential surface (COMPUTE_AGENT_TOKEN in project code = SYSTEM /cmd on
@@ -112,6 +115,48 @@ func TestParseProcStat(t *testing.T) {
 	}
 	if t2, r2, s2 := parseProcStat("no-paren"); t2 != 0 || r2 != 0 || s2 != 0 {
 		t.Errorf("malformed = (%d, %d, %d), want zeros", t2, r2, s2)
+	}
+}
+
+// TestParseProcStatBoundaries — malformed lines degrade to zeros or partial
+// parse, never panic. NOTE: the len<20 guard admits 20-21 fields, where
+// fields[21] would panic; real /proc/stat lines always carry 52 fields so
+// the hole stays latent — the smallest safe fixture is 22 fields.
+func TestParseProcStatBoundaries(t *testing.T) {
+	mk := func(over map[int]string) string {
+		// The parser indexes fields AFTER the closing paren, with the state
+		// char as fields[0] — so 22 trailing numbers yield 23 fields and
+		// utime/stime/starttime/rss land at 11/12/19/21.
+		f := make([]string, 23)
+		f[0] = "S"
+		for i := 1; i < 23; i++ {
+			f[i] = "0"
+		}
+		for i, v := range over {
+			f[i] = v
+		}
+		return "1234 (p) " + strings.Join(f, " ")
+	}
+	cases := []struct {
+		name  string
+		in    string
+		ticks int64
+		rss   int64
+		start int64
+	}{
+		{"empty", "", 0, 0, 0},
+		{"paren at end", "1234 (p)", 0, 0, 0},
+		{"truncated fields", "1234 (p) S 1 2 3 4 5 6 7", 0, 0, 0},
+		{"minimal 22 fields", mk(map[int]string{11: "12", 12: "11", 19: "19", 21: "500"}), 23, 500, 19},
+		{"non-numeric rss", mk(map[int]string{11: "12", 12: "11", 19: "19", 21: "x"}), 23, 0, 19},
+		{"non-numeric utime", mk(map[int]string{11: "x", 12: "11", 19: "19", 21: "500"}), 11, 500, 19},
+	}
+	for _, c := range cases {
+		ticks, rss, start := parseProcStat(c.in)
+		if ticks != c.ticks || rss != c.rss || start != c.start {
+			t.Errorf("%s: parseProcStat(%q) = (%d, %d, %d), want (%d, %d, %d)",
+				c.name, c.in, ticks, rss, start, c.ticks, c.rss, c.start)
+		}
 	}
 }
 
