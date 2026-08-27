@@ -35,8 +35,11 @@ func Init(dsn string) error {
 	if err != nil {
 		return fmt.Errorf("db open: %w", err)
 	}
-	DB.SetMaxOpenConns(5)
-	DB.SetMaxIdleConns(2)
+	// Pool sizing: 5 connections capped /api/projects at ~270 rps with
+	// 3-5s tail latency under 100 concurrency (load test 2026-08-28).
+	// 30 covers the burst; local PG handles it easily.
+	DB.SetMaxOpenConns(dbMaxConns())
+	DB.SetMaxIdleConns(10)
 	DB.SetConnMaxLifetime(5 * time.Minute)
 	if err = DB.Ping(); err != nil {
 		return fmt.Errorf("db ping: %w", err)
@@ -436,16 +439,33 @@ func validateTable(table string) error {
 }
 
 func isNumeric(s string) bool {
-	if s == "" { return false }
+	if s == "" {
+		return false
+	}
 	for _, c := range s {
-		if c < '0' || c > '9' { return false }
+		if c < '0' || c > '9' {
+			return false
+		}
 	}
 	return true
 }
 
 func sqliteVal(v string) string {
-	if isNumeric(v) { return v }
+	if isNumeric(v) {
+		return v
+	}
 	return "'" + strings.Replace(v, "'", "''", -1) + "'"
+}
+
+// dbMaxConns returns the main pool size: LAMBS_DB_MAX_CONNS override,
+// default 30.
+func dbMaxConns() int {
+	if v := os.Getenv("LAMBS_DB_MAX_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 30
 }
 
 // GetTableList returns all user table names in the database.
