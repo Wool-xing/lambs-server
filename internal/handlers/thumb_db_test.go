@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -125,5 +126,69 @@ func TestEnsureThumbsBackfillUsers(t *testing.T) {
 	}
 	if avURL != "" {
 		t.Errorf("literal 'null' avatar_url not normalized: %q", avURL)
+	}
+}
+
+// TestProjectLogoHappyPaths — the red-flag branches from the full-round
+// function map (QA 全量轮红标 #1): thumb served, full=1 original served
+// with SVG sandbox CSP, no-thumb fallback to icon, and corrupt data 404.
+func TestProjectLogoHappyPaths(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (
+		id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT,
+		icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0,
+		status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false,
+		icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT,
+		startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT,
+		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
+		services JSONB DEFAULT '[]')`)
+
+	// 1x1 red PNG and a minimal SVG, base64.
+	png := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	svg := "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4="
+
+	cases := []struct {
+		name, id, icon, thumb, query, wantCT, wantCSP string
+		wantCode                                       int
+	}{
+		{"thumb served", "logo-a", png, png, "", "image/png", "", 200},
+		{"full original svg sandbox", "logo-b", svg, png, "?full=1", "image/svg+xml", "sandbox", 200},
+		{"no thumb fallback to icon", "logo-c", png, "", "", "image/png", "", 200},
+		{"corrupt data 404", "logo-d", "data:image/png;base64,!!!", "", "", "", "", 404},
+	}
+	for _, c := range cases {
+		mustExec(`INSERT INTO projects (id, name, icon_url, icon_thumb) VALUES ($1,$2,$3,$4)`,
+			c.id, c.name, c.icon, c.thumb)
+		req := httptest.NewRequest("GET", "/api/projects/"+c.id+"/logo"+c.query, nil)
+		w := httptest.NewRecorder()
+		ProjectLogo(w, req, c.id)
+		if w.Code != c.wantCode {
+			t.Errorf("%s: code = %d, want %d", c.name, w.Code, c.wantCode)
+			continue
+		}
+		if c.wantCode == 200 {
+			if got := w.Header().Get("Content-Type"); got != c.wantCT {
+				t.Errorf("%s: Content-Type = %q, want %q", c.name, got, c.wantCT)
+			}
+			if got := w.Header().Get("Content-Security-Policy"); got != c.wantCSP {
+				t.Errorf("%s: CSP = %q, want %q", c.name, got, c.wantCSP)
+			}
+			if w.Body.Len() == 0 {
+				t.Errorf("%s: empty body", c.name)
+			}
+		}
+		mustExec(`DELETE FROM projects WHERE id=$1`, c.id)
 	}
 }

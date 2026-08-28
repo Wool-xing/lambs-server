@@ -82,6 +82,13 @@ func TestHandleLoginRealDB(t *testing.T) {
 	if code, _ := login("disabled_user", "secret123"); code != 403 {
 		t.Errorf("disabled user = %d, want 403", code)
 	}
+	// Malformed JSON must 400 before any DB touch (QA 全量轮红标 #3 补缺).
+	r := httptest.NewRequest("POST", "/api/auth/login", bytes.NewReader([]byte("not-json")))
+	w := httptest.NewRecorder()
+	HandleLogin(w, r)
+	if w.Code != 400 {
+		t.Errorf("malformed JSON = %d, want 400", w.Code)
+	}
 
 	// Restore the unit-test invariant: with db.DB nil, RequireAuth follows
 	// the JWT-claims path (auth_test.go / auth_more_test.go depend on it).
