@@ -698,7 +698,8 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	var req struct {
-		Status string `json:"status"`
+		Status     string `json:"status"`
+		OfflineMsg string `json:"offline_msg"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	var current string
@@ -722,6 +723,19 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 		auth.JSONErr(w, 400, "状态只能是 online/offline/maintenance")
 		return
 	}
+	// 同态守卫:状态未变 → 只落 offline_msg(如有),不发通知、不启停代理 —
+	// 同态 PATCH 也会重启一遍代理+刷一条通知是越权矩阵 pin 的噪音行为。
+	if next == current {
+		if req.OfflineMsg != "" {
+			if _, err := db.DB.Exec("UPDATE projects SET offline_msg=$1 WHERE id=$2", req.OfflineMsg, id); err != nil {
+				log.Printf("PatchProjectStatus offline_msg: %v", err)
+				auth.JSONErr(w, 500, "状态更新失败")
+				return
+			}
+		}
+		auth.JSONOK(w, map[string]string{"status": next})
+		return
+	}
 	if _, err := db.DB.Exec("UPDATE projects SET status=$1, updated_at=NOW() WHERE id=$2", next, id); err != nil {
 		log.Printf("PatchProjectStatus update: %v", err)
 		auth.JSONErr(w, 500, "状态更新失败")
@@ -742,12 +756,13 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 		runtime.ProcMgr.DetachServices(id)
 	}
 
-	statusLabel := map[string]string{"online": "上线", "offline": "已停用", "maintenance": "维护中"}[next]
+	// 动作词（用户分区：状态名词用在线/离线/维护中，动作通知保留上线/停用）。
+	statusLabel := map[string]string{"online": "已上线", "offline": "已停用", "maintenance": "维护中"}[next]
 	nid := fmt.Sprintf("n%d", time.Now().UnixNano())
 	db.DB.Exec("INSERT INTO notifications (id, project_id, type, title, content, is_read, created_at) VALUES ($1,$2,$3,$4,$5,false,NOW())",
-		nid, id, "status", "项目状态变更", fmt.Sprintf("「%s」已变更为「%s」", pname, statusLabel))
+		nid, id, "status", "项目状态变更", fmt.Sprintf("「%s」%s", pname, statusLabel))
 	go notify.NotifyAdmin("Lambs项目状态变更",
-		fmt.Sprintf("项目「%s」状态变更为「%s」\n时间: %s", pname, statusLabel, time.Now().Format("2006-01-02 15:04:05")))
+		fmt.Sprintf("项目「%s」%s\n时间: %s", pname, statusLabel, time.Now().Format("2006-01-02 15:04:05")))
 	go nginx.Sync()
 	auth.JSONOK(w, map[string]string{"status": next})
 }
