@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/runtime"
 )
 
 // TestTasksCRUD — real PostgreSQL: create validates cron, list returns the
@@ -171,5 +172,50 @@ func TestRunTaskNowHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(logline, "run-task-now-ok") {
 		t.Errorf("last_log = %q, want command output", logline)
+	}
+}
+
+// TestRunTaskNowBranches — handler-level failure branches (QA 全量轮红标 #2):
+// unknown id → 404, task already in flight → 404 with the guard message.
+func TestRunTaskNowBranches(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+		cron TEXT NOT NULL, command TEXT NOT NULL, host TEXT NOT NULL DEFAULT 'app1',
+		enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_run_at TIMESTAMPTZ, last_status TEXT NOT NULL DEFAULT '', last_log TEXT NOT NULL DEFAULT '')`)
+
+	// Unknown id → 404.
+	req := httptest.NewRequest("POST", "/api/tasks/nope/run", nil)
+	req.SetPathValue("id", "nope")
+	w := httptest.NewRecorder()
+	RunTaskNow(w, req)
+	if w.Code != 404 {
+		t.Errorf("unknown id: code = %d, want 404", w.Code)
+	}
+
+	// In flight → 404 with guard message (long-running command keeps it busy).
+	mustExec(`DELETE FROM scheduled_tasks WHERE id='t-branches'`)
+	mustExec(`INSERT INTO scheduled_tasks (id, project_id, name, cron, command, host) VALUES ('t-branches','proj-x','分支任务','*/5 * * * *','sleep 10 && echo done','app1')`)
+	if err := runtime.StartTaskRun("t-branches"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	req2 := httptest.NewRequest("POST", "/api/tasks/t-branches/run", nil)
+	req2.SetPathValue("id", "t-branches")
+	w2 := httptest.NewRecorder()
+	RunTaskNow(w2, req2)
+	if w2.Code != 404 {
+		t.Errorf("in flight: code = %d, want 404", w2.Code)
 	}
 }
