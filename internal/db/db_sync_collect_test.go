@@ -240,6 +240,20 @@ func TestCollectStatsMismatchAndUnknown(t *testing.T) {
 	}
 }
 
+func TestCollectStatsSQLMSSQL(t *testing.T) {
+	dsn := os.Getenv("LAMBS_MSSQL_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_MSSQL_DSN not set — real SQL Server verification skipped")
+	}
+	stats, err := CollectStats("mssql", dsn)
+	if err != nil {
+		t.Fatalf("CollectStats mssql: %v", err)
+	}
+	if _, ok := stats["tables"]; !ok {
+		t.Fatalf("missing tables key: %v", stats)
+	}
+}
+
 func TestMysqlSumRowsReal(t *testing.T) {
 	dsn := os.Getenv("LAMBS_TEST_MYSQL_DSN")
 	if dsn == "" {

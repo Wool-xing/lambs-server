@@ -90,6 +90,36 @@ func TestTestHealthPriority(t *testing.T) {
 	}
 }
 
+// TestTestDSNRealContainers — TestDSN success branches against the docker
+// test containers (each subtest gates on its own env var). Qdrant has no
+// test container here — its TCP branch stays covered by the live-listener
+// case in TestTestDSNTCPDialBranches.
+func TestTestDSNRealContainers(t *testing.T) {
+	cases := []struct {
+		name, envVar, prefix, dbType string
+	}{
+		{"mysql", "LAMBS_TEST_MYSQL_DSN", "", "mysql"},
+		{"mssql", "LAMBS_MSSQL_DSN", "", "mssql"},
+		{"mongodb", "LAMBS_TEST_MONGO_ADDR", "mongodb://", "mongodb"},
+		{"redis", "LAMBS_TEST_REDIS_ADDR", "redis://", "redis"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := os.Getenv(c.envVar)
+			if v == "" {
+				t.Skipf("%s not set — real %s container check skipped", c.envVar, c.name)
+			}
+			got := TestDSN(c.prefix + v)
+			if got["reachable"] != true {
+				t.Fatalf("TestDSN(%s) = %v, want reachable", c.name, got)
+			}
+			if got["db_type"] != c.dbType {
+				t.Fatalf("TestDSN(%s) db_type = %v, want %s", c.name, got["db_type"], c.dbType)
+			}
+		})
+	}
+}
+
 // TestInitAndTestDSNPostgres — env-gated: real postgres connect + ping
 // through Init, and the postgres branch of testDSNInternal.
 func TestInitAndTestDSNPostgres(t *testing.T) {
