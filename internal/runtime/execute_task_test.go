@@ -108,3 +108,51 @@ func TestStartTaskRunAsync(t *testing.T) {
 	}
 	t.Errorf("last_status = %q, want success", status)
 }
+
+// TestStartTaskRunConcurrentGuard — a task already in flight must not start
+// a second concurrent execution of the same command (manual double-click +
+// cron firing in the same minute). QA full-round calibration candidate 4.
+func TestStartTaskRunConcurrentGuard(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+		cron TEXT NOT NULL, command TEXT NOT NULL, host TEXT NOT NULL DEFAULT 'app1',
+		enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_run_at TIMESTAMPTZ, last_status TEXT NOT NULL DEFAULT '', last_log TEXT NOT NULL DEFAULT '')`)
+	mustExec(`DELETE FROM scheduled_tasks WHERE id='t-guard'`)
+	mustExec(`INSERT INTO scheduled_tasks (id, project_id, name, cron, command, host) VALUES ('t-guard','proj-x','并发守卫','*/5 * * * *','sleep 3 && echo guard-ok','app1')`)
+
+	if err := StartTaskRun("t-guard"); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	if err := StartTaskRun("t-guard"); err == nil {
+		t.Error("second start while in flight should be rejected")
+	}
+	// The guard must release after completion so the task can run again.
+	deadline := time.Now().Add(15 * time.Second)
+	var status string
+	for time.Now().Before(deadline) {
+		db.DB.QueryRow("SELECT last_status FROM scheduled_tasks WHERE id='t-guard'").Scan(&status)
+		if status == "success" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if status != "success" {
+		t.Fatalf("last_status = %q, want success", status)
+	}
+	if err := StartTaskRun("t-guard"); err != nil {
+		t.Errorf("restart after completion should succeed, got: %v", err)
+	}
+}
