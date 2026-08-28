@@ -172,7 +172,7 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 			for pRows.Next() {
 				var name, status, updated string
 				pRows.Scan(&name, &status, &updated)
-				statusLabel := map[string]string{"online": "运行中", "offline": "已离线", "maintenance": "维护中"}[status]
+				statusLabel := map[string]string{"online": "在线", "offline": "离线", "maintenance": "维护中"}[status]
 				lvl := "info"
 				if status != "online" {
 					lvl = "warn"
@@ -215,7 +215,7 @@ func handleAggregatedLogs(w http.ResponseWriter, r *http.Request) {
 		for pRows.Next() {
 			var name, status, updated string
 			pRows.Scan(&name, &status, &updated)
-			statusLabel := map[string]string{"online": "运行中", "offline": "已离线", "maintenance": "维护中"}[status]
+			statusLabel := map[string]string{"online": "在线", "offline": "离线", "maintenance": "维护中"}[status]
 			lvl := "info"
 			if status != "online" {
 				lvl = "warn"

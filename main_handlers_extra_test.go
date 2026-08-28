@@ -79,7 +79,10 @@ func TestAggregatedLogsSAProjectRows(t *testing.T) {
 		t.Fatalf("aggregated = %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "聚合项目") || !strings.Contains(body, "已离线") {
-		t.Errorf("project status row missing: %s", body[:400])
+	if !strings.Contains(body, "聚合项目") || !strings.Contains(body, "离线") {
+		if len(body) > 400 {
+			body = body[:400]
+		}
+		t.Errorf("project status row missing: %s", body)
 	}
 }

@@ -3,11 +3,16 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/runtime"
 )
 
 // TestPatchProjectStatusNotifies — the write-side contract for status
@@ -68,8 +73,9 @@ func TestPatchProjectStatusNotifies(t *testing.T) {
 	if nid == "" || ntype != "status" || title != "项目状态变更" {
 		t.Errorf("notification contract broken: id=%q type=%q title=%q", nid, ntype, title)
 	}
-	if content == "" {
-		t.Error("notification content empty")
+	// Verb-form wording per the status-semantics design: 上线/已停用 are gone.
+	if !strings.Contains(content, "已停用") {
+		t.Errorf("notification content = %q, want 已停用", content)
 	}
 
 	// Non-admin (viewer) is rejected before any write.
@@ -81,5 +87,80 @@ func TestPatchProjectStatusNotifies(t *testing.T) {
 	PatchProjectStatus(w2, r2, "proj-x")
 	if w2.Code != 403 {
 		t.Errorf("viewer patch = %d, want 403", w2.Code)
+	}
+}
+
+// TestPatchProjectStatusSameStatusNoop — the homomorphic guard: a PATCH whose
+// status equals the current one must write NO notification and must NOT touch
+// the TCP proxy (no restart, no stop) — it only persists offline_msg when
+// provided. The proxy is asserted observably: a live listener must still
+// accept connections after the same-status patch, and a real transition must
+// close it (negative control proving the dial detects a stopped proxy).
+func TestPatchProjectStatusSameStatusNoop(t *testing.T) {
+	mustExec := puFixture(t)
+	// Pick a free port for the proxy listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	mustExec(`INSERT INTO projects (id, name, status, port, backend_url) VALUES ('ps-same','同态','online',$1,'127.0.0.1:1')`, port)
+	mustExec(`DELETE FROM notifications WHERE project_id='ps-same'`) // table persists across runs
+	t.Cleanup(func() { runtime.TCPProxyMgr.Stop("ps-same") })
+
+	patch := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PATCH", "/api/projects/ps-same/status", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("X-User-ID", "admin")
+		r.Header.Set("X-Role", "super_admin")
+		w := httptest.NewRecorder()
+		PatchProjectStatus(w, r, "ps-same")
+		return w
+	}
+	dial := func() error {
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
+		if c != nil {
+			c.Close()
+		}
+		return err
+	}
+	if err := runtime.TCPProxyMgr.Start("ps-same"); err != nil {
+		t.Fatalf("start proxy: %v", err)
+	}
+	if err := dial(); err != nil {
+		t.Fatalf("proxy not listening before patch: %v", err)
+	}
+
+	// Same-status PATCH → 200, offline_msg persisted, NO notification, proxy alive.
+	if w := patch(`{"status":"online","offline_msg":"同态消息"}`); w.Code != 200 {
+		t.Fatalf("same-status = %d (body %s)", w.Code, w.Body.String())
+	}
+	var status, msg string
+	db.DB.QueryRow("SELECT status, COALESCE(offline_msg,'') FROM projects WHERE id='ps-same'").Scan(&status, &msg)
+	if status != "online" || msg != "同态消息" {
+		t.Errorf("after same-status = status %q offline_msg %q, want online/同态消息", status, msg)
+	}
+	var n int
+	db.DB.QueryRow("SELECT COUNT(*) FROM notifications WHERE project_id='ps-same'").Scan(&n)
+	if n != 0 {
+		t.Errorf("same-status notifications = %d, want 0", n)
+	}
+	if err := dial(); err != nil {
+		t.Errorf("proxy stopped by same-status patch: %v", err)
+	}
+
+	// Real transition → verb-form notification, and the proxy must stop
+	// (proves the dial check above can detect a stopped proxy).
+	if w := patch(`{"status":"offline"}`); w.Code != 200 {
+		t.Fatalf("offline = %d (body %s)", w.Code, w.Body.String())
+	}
+	if err := dial(); err == nil {
+		t.Error("proxy still listening after real transition to offline — Stop did not run")
+	}
+	var content string
+	db.DB.QueryRow("SELECT content FROM notifications WHERE project_id='ps-same' AND type='status' ORDER BY created_at DESC LIMIT 1").Scan(&content)
+	if !strings.Contains(content, "已停用") {
+		t.Errorf("notification content = %q, want 已停用", content)
 	}
 }
