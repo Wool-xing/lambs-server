@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"testing"
 
 	"lambs-server-go/internal/db"
@@ -79,5 +80,35 @@ func TestPortMgrAllocate(t *testing.T) {
 	}
 	if pd == p {
 		t.Errorf("pm-d got %d, collides with pm-a's %d", pd, p)
+	}
+}
+
+// TestPortMgrAllocateExhaustion — every port in the range is LISTENED on:
+// Allocate must answer the exact exhaustion error, never a wrong port. The
+// lazy DB degrades every query to zero rows, so only the listener sweep
+// decides the outcome.
+func TestPortMgrAllocateExhaustion(t *testing.T) {
+	lazyDB(t)
+	pm := &PortManager{StartPort: 46000, EndPort: 46002}
+	var holds []net.Listener
+	for port := 46000; port <= 46002; port++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			t.Fatalf("hold %d: %v", port, err)
+		}
+		holds = append(holds, ln)
+	}
+	defer func() {
+		for _, ln := range holds {
+			ln.Close()
+		}
+	}()
+
+	_, err := pm.Allocate("pm-full")
+	if err == nil {
+		t.Fatal("Allocate with full range succeeded, want exhaustion error")
+	}
+	if !strings.Contains(err.Error(), "no free ports in range 46000-46002") {
+		t.Errorf("err = %v, want range exhaustion message", err)
 	}
 }

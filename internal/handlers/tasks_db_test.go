@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	"lambs-server-go/internal/db"
 )
@@ -100,5 +103,73 @@ func TestTasksCRUD(t *testing.T) {
 	RunTaskNow(rw, rr)
 	if rw.Code != 404 {
 		t.Errorf("run-now missing = %d, want 404 (body %s)", rw.Code, rw.Body.String())
+	}
+}
+
+// TestRunTaskNowHappyPath — real PostgreSQL: a stored task with a real
+// executable command runs asynchronously; the handler answers 200 with
+// {"started": id} and last_status/last_log land (bash -c on the Lambs host,
+// same contract executeTask uses).
+func TestRunTaskNowHappyPath(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not present")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+		cron TEXT NOT NULL, command TEXT NOT NULL, host TEXT NOT NULL DEFAULT 'app1',
+		enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_run_at TIMESTAMPTZ, last_status TEXT NOT NULL DEFAULT '', last_log TEXT NOT NULL DEFAULT '')`)
+	mustExec(`DELETE FROM scheduled_tasks WHERE id='t-run'`)
+	mustExec(`INSERT INTO scheduled_tasks (id, project_id, name, cron, command, host) VALUES ('t-run','p1','立即运行','*/5 * * * *','echo run-task-now-ok','app1')`)
+	defer mustExec(`DELETE FROM scheduled_tasks WHERE id='t-run'`)
+
+	r := httptest.NewRequest("POST", "/api/tasks/t-run/run", nil)
+	r.Header.Set("X-User-ID", "admin-uid")
+	r.Header.Set("X-Role", "super_admin")
+	r.SetPathValue("id", "t-run")
+	w := httptest.NewRecorder()
+	RunTaskNow(w, r)
+	if w.Code != 200 {
+		t.Fatalf("run-now = %d (body %s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Started string `json:"started"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v (body %s)", err, w.Body.String())
+	}
+	if body.Data.Started != "t-run" {
+		t.Errorf("started = %q, want t-run", body.Data.Started)
+	}
+
+	// The run is async — poll for the outcome to land.
+	deadline := time.Now().Add(10 * time.Second)
+	var status, logline string
+	for time.Now().Before(deadline) {
+		db.DB.QueryRow("SELECT last_status, last_log FROM scheduled_tasks WHERE id='t-run'").Scan(&status, &logline)
+		if status != "" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if status != "success" {
+		t.Errorf("last_status = %q, want success", status)
+	}
+	if !strings.Contains(logline, "run-task-now-ok") {
+		t.Errorf("last_log = %q, want command output", logline)
 	}
 }

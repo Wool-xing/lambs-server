@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -198,6 +199,73 @@ func TestLocalServicesDegrade(t *testing.T) {
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || !strings.Contains(string(raw), `"services"`) {
 		t.Errorf("local-services = %d %s", resp.StatusCode, raw)
+	}
+}
+
+// TestLocalServicesProtectionList — the CRITICAL-unit map: Lambs's own
+// dependencies (postgresql/lambs-server/nginx) must come back managed=false
+// so the UI never lets a user stop the management plane. systemctl is absent
+// on Windows, so the handler normally degrades — this test injects a fake
+// systemctl.bat on PATH (the assertion-compatible seam) and exercises the
+// real parse+mark path.
+func TestLocalServicesProtectionList(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("fake-systemctl PATH seam is Windows-only (systemctl.bat)")
+	}
+	dir := t.TempDir()
+	lines := []string{
+		"postgresql.service                     enabled",
+		"lambs-server.service                   enabled",
+		"nginx.service                          enabled",
+		"ssh.service                            enabled",
+		"tailscaled.service                     enabled",
+		"fail2ban.service                       enabled",
+		"lambs-web.service                      enabled",
+		"myapp.service                          enabled",
+	}
+	bat := "@echo off\r\n"
+	for _, l := range lines {
+		bat += "echo " + l + "\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "systemctl.bat"), []byte(bat), 0644); err != nil {
+		t.Fatalf("write fake systemctl: %v", err)
+	}
+	t.Setenv("PATH", dir+";"+os.Getenv("PATH"))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/runtime/local-services", nil)
+	handleLocalServices(w, r)
+	if w.Code != 200 {
+		t.Fatalf("local-services = %d (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Services []map[string]interface{} `json:"services"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v (body %s)", err, w.Body.String())
+	}
+	if len(body.Data.Services) != len(lines) {
+		t.Fatalf("services = %d, want %d (body %s)", len(body.Data.Services), len(lines), w.Body.String())
+	}
+	managed := map[string]bool{}
+	for _, s := range body.Data.Services {
+		managed[s["unit"].(string)] = s["managed"].(bool)
+	}
+	for _, unit := range []string{"postgresql.service", "lambs-server.service", "nginx.service", "ssh.service", "tailscaled.service", "fail2ban.service"} {
+		if m := managed[unit]; m {
+			t.Errorf("%s managed = true, want false (own dependency)", unit)
+		}
+	}
+	for _, unit := range []string{"lambs-web.service", "myapp.service"} {
+		if m := managed[unit]; !m {
+			t.Errorf("%s managed = false, want true (ordinary unit)", unit)
+		}
+	}
+	// Names drop the .service suffix in the payload.
+	if body.Data.Services[0]["name"] != "postgresql" {
+		t.Errorf("name = %v, want postgresql", body.Data.Services[0]["name"])
 	}
 }
 

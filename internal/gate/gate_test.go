@@ -159,3 +159,51 @@ func TestHandleCheckInternalNoAuth(t *testing.T) {
 		t.Errorf("check-internal = %d %s", w.Code, w.Body.String())
 	}
 }
+
+// TestHandleCheckInternalHappyPath — nginx auth_request with a real DB and a
+// real project row: an online project's path passes (allowed:true), a
+// blocked project's path is refused. This is the branch TestHandleCheck
+// exercises but check-internal only had the no-DB fast path.
+func TestHandleCheckInternalHappyPath(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects;`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, base_path TEXT, status TEXT)`)
+	mustExec(`INSERT INTO projects (id, name, base_path, status) VALUES
+		('ci-ok', 'online proj', '/ci-ok', 'online'),
+		('ci-off', 'offline proj', '/ci-off', 'offline')`)
+
+	cases := []struct {
+		name     string
+		path     string
+		wantCode int
+		want     string
+	}{
+		{"online project passes", "/ci-ok", 200, "allowed\":true"},
+		{"offline project blocked", "/ci-off", 403, ""},
+		{"unrelated path passes", "/other", 200, "allowed\":true"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/api/gate/check-internal?path="+c.path, nil)
+			w := httptest.NewRecorder()
+			HandleCheckInternal(w, r)
+			if w.Code != c.wantCode {
+				t.Errorf("code = %d, want %d (body %s)", w.Code, c.wantCode, w.Body.String())
+			}
+			if c.want != "" && !strings.Contains(w.Body.String(), c.want) {
+				t.Errorf("body missing %q: %s", c.want, w.Body.String())
+			}
+		})
+	}
+}

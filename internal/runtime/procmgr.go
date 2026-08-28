@@ -262,8 +262,8 @@ func parseProcStat(s string) (ticks int64, rssPages int64, startTicks int64) {
 		return 0, 0, 0
 	}
 	fields := strings.Fields(s[idx+2:])
-	// fields[0]=state(3), utime=14, stime=15, starttime=22 → index 11,12,19 in this slice
-	if len(fields) < 20 {
+	// fields[0]=state(3), utime=14, stime=15, starttime=22, rss=24 → index 11,12,19,21 in this slice
+	if len(fields) < 22 {
 		return 0, 0, 0
 	}
 	utime, _ := strconv.ParseInt(fields[11], 10, 64)

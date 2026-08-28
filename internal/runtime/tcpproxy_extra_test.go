@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -211,4 +212,54 @@ func TestIdleOnceDegradedPaths(t *testing.T) {
 	tp.actives["idle"] = &idle
 	tp.mu.Unlock()
 	tp.idleOnce() // idle but Status reports not-running on the lazy DB: skip
+}
+
+// TestIdleOnceStopsIdleProcess — the full stop branch: a genuinely running
+// process, idle (zero active connections) for 10 simulated minutes, with an
+// unreachable backend — idleOnce must stop it. Uses the GLOBAL ProcMgr
+// (idleOnce reads the package var) and the same real spawn/wait machinery as
+// production Start.
+func TestIdleOnceStopsIdleProcess(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not present")
+	}
+	mustExec := projectsFixture(t)
+	mustExec(`DELETE FROM projects WHERE id='idle-stop'`)
+	mustExec(`INSERT INTO projects (id, name, port, startup_command, service_name) VALUES ('idle-stop','闲置项目','36501','sleep 300','')`)
+	defer mustExec(`DELETE FROM projects WHERE id='idle-stop'`)
+
+	t.Cleanup(func() {
+		ProcMgr.Stop("idle-stop")
+		ProcMgr.mu.Lock()
+		delete(ProcMgr.procs, "idle-stop")
+		ProcMgr.mu.Unlock()
+	})
+
+	if err := ProcMgr.Start("idle-stop"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if st := ProcMgr.Status("idle-stop"); st["running"] != true {
+		t.Fatalf("status after Start = %v, want running", st)
+	}
+	// Rewind the recorded start time so uptime_sec crosses the 5-minute idle
+	// threshold without waiting. Same procState object — the Wait goroutine's
+	// done channel must stay the one Stop will select on.
+	ProcMgr.mu.Lock()
+	ProcMgr.procs["idle-stop"].started = time.Now().Add(-10 * time.Minute)
+	ProcMgr.mu.Unlock()
+	if st := ProcMgr.Status("idle-stop"); st["uptime_sec"].(int) <= 300 {
+		t.Fatalf("uptime_sec = %v, want > 300 (idle threshold)", st["uptime_sec"])
+	}
+
+	var idle int64
+	tp := newTestTCPProxy()
+	tp.mu.Lock()
+	tp.actives["idle-stop"] = &idle
+	tp.mu.Unlock()
+
+	tp.idleOnce()
+
+	if st := ProcMgr.Status("idle-stop"); st["running"] == true {
+		t.Errorf("status after idleOnce = %v, want stopped", st)
+	}
 }

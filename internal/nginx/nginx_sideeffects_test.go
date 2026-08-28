@@ -1,6 +1,7 @@
 package nginx
 
 import (
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,6 +121,56 @@ func TestSyncRetries(t *testing.T) {
 	Sync()
 	if rec.calls != 4 {
 		t.Errorf("ssh invocations = %d, want 4 (2 failed tee + tee + reload)", rec.calls)
+	}
+}
+
+// TestSyncAllAttemptsFail — Web1 down the whole time: exactly 3 ssh attempts
+// (one tee per try), the 4th must never happen.
+func TestSyncAllAttemptsFail(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DELETE FROM projects WHERE id='nginx-alldown'`)
+	mustExec(`INSERT INTO projects (id, name, base_path, port) VALUES ('nginx-alldown','全挂项目','/alldown','3602')`)
+	defer mustExec(`DELETE FROM projects WHERE id='nginx-alldown'`)
+
+	oldHost, oldDelay := web1Host, retryDelay
+	web1Host = "ubuntu@web1.internal"
+	retryDelay = time.Millisecond
+	defer func() { web1Host, retryDelay = oldHost, oldDelay }()
+
+	rec := stubSSH(t, os.ErrDeadlineExceeded, os.ErrDeadlineExceeded, os.ErrDeadlineExceeded)
+	Sync()
+	if rec.calls != 3 {
+		t.Errorf("ssh invocations = %d, want 3 (all attempts fail, no 4th)", rec.calls)
+	}
+}
+
+// TestSyncDBDown — database unreachable: Sync bails before any ssh work; the
+// managed config on Web1 is never touched.
+func TestSyncDBDown(t *testing.T) {
+	tdb, _ := sql.Open("postgres", "postgres://u:p@127.0.0.1:1/none")
+	old := db.DB
+	db.DB = tdb
+	t.Cleanup(func() { db.DB = old })
+
+	oldHost := web1Host
+	web1Host = "ubuntu@web1.internal"
+	defer func() { web1Host = oldHost }()
+
+	rec := stubSSH(t)
+	Sync()
+	if rec.calls != 0 {
+		t.Errorf("ssh invocations = %d, want 0 (DB query failed first)", rec.calls)
 	}
 }
 
