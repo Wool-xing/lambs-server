@@ -54,7 +54,7 @@ jobs:
           # Match the runner's preinstalled toolchain — a mismatch makes
           # -coverprofile recompile stdlib and fail with
           # "compile: version does not match go tool version".
-          go-version: '1.25.7'
+          go-version: '1.26.6'
       # -race catches data races (procmgr/tcpproxy had three fixed in round 1);
       # ubuntu runners ship gcc so CGO race builds work.
       # -p 1 serializes packages: they share one test DB and main's E2E
