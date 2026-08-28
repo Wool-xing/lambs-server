@@ -62,7 +62,7 @@ jobs:
       - name: Install pg_dump (PG backup test)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
       - name: Test with race detector
-        run: go test -p 1 -race ./...
+        run: go test -p 1 -race -shuffle=on ./...
       - name: Privacy scan
         run: bash scripts/privacy-scan.sh .
       - name: Route x method x status matrix
@@ -75,13 +75,19 @@ jobs:
           "$(go env GOPATH)/bin/staticcheck" ./...
       - name: Race x2 (runtime hot paths)
         run: go test -p 1 -race -count=2 ./internal/runtime/ ./internal/notify/
+      - name: govulncheck (reachable stdlib/deps)
+        run: |
+          # QA 全量轮校准候选②（2026-08-29）：漏洞扫描必须进 CI 门禁，
+          # 手工扫描会被下一次依赖变更静默回退。
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: Coverage report + regression gate
         run: |
           go test -p 1 -coverprofile=coverage.out ./...
           TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           # Gate at the current level: new code must not drag coverage down
           # (raise the bar as the sprint lands; round-7 calibration item).
-          THRESHOLD=56.0
+          THRESHOLD=75.0
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
           echo "Total coverage: ${TOTAL}% (threshold ${THRESHOLD}%)"
           if awk "BEGIN{exit !(${TOTAL} < ${THRESHOLD})}"; then
@@ -105,7 +111,7 @@ jobs:
               tot[pkg] += int(num)
               if int(cnt) > 0:
                   cov[pkg] += int(num)
-          floor = 40.0
+          floor = 50.0
           bad = []
           for pkg in sorted(tot):
               pct = 100 * cov[pkg] / tot[pkg]

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"lambs-server-go/internal/db"
@@ -170,13 +171,39 @@ func executeTask(id, projectID, name, command, host string) {
 	}
 }
 
+// taskRunGuard prevents a second concurrent execution of the same task
+// (manual "run now" double-click + cron firing the same minute). In-memory
+// only: single-process deployment, guard resets on restart.
+var (
+	taskRunMu   sync.Mutex
+	taskRunning = map[string]bool{}
+)
+
 // StartTaskRun loads a task and runs it immediately (async).
 func StartTaskRun(id string) error {
+	taskRunMu.Lock()
+	if taskRunning[id] {
+		taskRunMu.Unlock()
+		return fmt.Errorf("任务正在运行")
+	}
+	taskRunning[id] = true
+	taskRunMu.Unlock()
+
 	var project, name, command, host string
 	if err := db.DB.QueryRow("SELECT project_id, name, command, host FROM scheduled_tasks WHERE id=$1", id).Scan(&project, &name, &command, &host); err != nil {
+		taskRunMu.Lock()
+		delete(taskRunning, id)
+		taskRunMu.Unlock()
 		return fmt.Errorf("任务不存在")
 	}
-	go executeTask(id, project, name, command, host)
+	go func() {
+		defer func() {
+			taskRunMu.Lock()
+			delete(taskRunning, id)
+			taskRunMu.Unlock()
+		}()
+		executeTask(id, project, name, command, host)
+	}()
 	return nil
 }
 
