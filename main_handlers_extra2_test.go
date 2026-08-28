@@ -108,6 +108,19 @@ func mustID(t *testing.T, username string) string {
 // through the real mux + auth gate. Codes vary by gate/validation; the
 // contract is an HTTP response (no 500 panic).
 func TestNewMuxRouteSweep(t *testing.T) {
+	// Several real handlers call db.DB directly; without an initialized DB the
+	// sweep trips nil-pointer panics that depend on test order. Make the sweep
+	// self-sufficient (same gate as the other real-DB tests): init once, skip
+	// only when the DSN is missing.
+	if db.DB == nil {
+		dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+		if dsn == "" {
+			t.Skip("LAMBS_TEST_PG_DSN not set — route sweep needs an initialized DB")
+		}
+		if err := db.Init(dsn); err != nil {
+			t.Fatalf("init db: %v", err)
+		}
+	}
 	ts := httptest.NewServer(newMux())
 	defer ts.Close()
 	// Full registration table (method + path), params replaced with "x".
