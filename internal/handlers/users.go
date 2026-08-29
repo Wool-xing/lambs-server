@@ -191,10 +191,31 @@ func DeleteUser(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
+	// Input validation first (REST convention: 400 before 403), then the
+	// authorization gate. Route guard is plain auth (no longer sa-only):
+	// super_admin may reset anyone; project_admin only users sharing a
+	// project with them; viewers never. Forged X-Role is irrelevant —
+	// RequireAuth overwrites headers.
 	var req struct{ NewPassword string `json:"new_password"` }
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.NewPassword == "" { auth.JSONErr(w, 400, "请输入新密码"); return }
 	if len(req.NewPassword) < 6 { auth.JSONErr(w, 400, "新密码至少6位"); return }
+	if role := r.Header.Get("X-Role"); role != "super_admin" {
+		if role != "project_admin" {
+			auth.JSONErr(w, 403, "无权重置该用户密码")
+			return
+		}
+		var targetRole string
+		db.DB.QueryRow("SELECT role FROM users WHERE id=$1", id).Scan(&targetRole)
+		if targetRole == "super_admin" {
+			auth.JSONErr(w, 403, "无权重置该用户密码")
+			return
+		}
+		if !usersShareProject(r.Header.Get("X-User-ID"), id) {
+			auth.JSONErr(w, 403, "无权重置该用户密码")
+			return
+		}
+	}
 	// R7: salted client payload keeps its shape; legacy plaintext wraps once
 	// WITH the account's existing salt — wrapping without it would lock the
 	// account out of both contracts (R7 code review).
@@ -213,4 +234,31 @@ func ResetPassword(w http.ResponseWriter, r *http.Request, id string) {
 	db.DB.QueryRow("SELECT username FROM users WHERE id=$1", id).Scan(&uname)
 	auditLog(r, "重置密码", uname, "管理员重置用户密码")
 	auth.JSONOK(w, map[string]bool{"ok": true})
+}
+
+// usersShareProject reports whether two users share at least one project.
+func usersShareProject(aID, bID string) bool {
+	read := func(id string) []string {
+		var raw string
+		if err := db.DB.QueryRow("SELECT COALESCE(project_access::text,'[]') FROM users WHERE id=$1", id).Scan(&raw); err != nil {
+			return nil
+		}
+		var out []string
+		json.Unmarshal([]byte(raw), &out)
+		return out
+	}
+	a, b := read(aID), read(bID)
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, p := range a {
+		seen[p] = true
+	}
+	for _, p := range b {
+		if seen[p] {
+			return true
+		}
+	}
+	return false
 }
