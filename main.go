@@ -436,6 +436,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.DB.Close()
+	db.EnsureCoreSchema()
 	auth.EnsureForgotSchema()
 	runtime.EnsureCronSchema()
 	runtime.StartCronScheduler()

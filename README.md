@@ -147,3 +147,43 @@ Separate binary in `cmd/tg-bot/`. Replaces Python tg-bot.py (30MB → 9MB).
 Same 10 commands, same polling→webhook idle pattern.
 
 Build: `cd cmd/tg-bot && GOOS=linux GOARCH=amd64 go build -o tg-bot .`
+
+## First Run (fresh database)
+
+Core tables (`users`, `projects`, `notifications`, `audit_logs`) are created
+**automatically at startup** — no manual SQL needed. The first registered
+account becomes `super_admin`. After bootstrapping, set
+`LAMBS_ALLOW_REGISTER=false` in `.env` so nobody can race to grab the first
+account on a public deployment.
+
+## What It Manages
+
+- **Projects** — status machine (在线/离线/维护中), process start/stop via
+  `startup_command` (supports `cd /dir && cmd`) or a systemd unit
+  (`service_name`), auto-restart with 30s health checks, TCP proxy, scheduled
+  tasks (cron, dual-channel: Linux + Windows agent)
+- **Data sources** — 8 types, all real-machine verified:
+  PostgreSQL / MySQL / MSSQL / MongoDB / Redis / SQLite / REST (HTTP
+  convention) / Qdrant (vector). Table browse + CRUD + backups per type.
+  DSN scheme whitelist is validated at save time; connectivity via
+  测试连接 (test connection).
+- **Users & RBAC** — super_admin / project_admin / viewer, project-level
+  grants, salted passwords (R7 contract), password reset (super_admin any
+  user, project_admin shared-project users only)
+- **Backups** — GPG-encrypted (AES256) upload to Telegram, list/restore/
+  download
+- **Observability** — audit log, notification center, multi-node system
+  monitor (本机 + wool + windows-agent), aggregated logs
+- **Gate** — nginx auth_request offline/maintenance page with project
+  branding
+
+## Database Notes
+
+- PostgreSQL is the only required store (system metadata). Project data
+  sources are separate and connect out from the server.
+- The server opens `LAMBS_DB_MAX_CONNS` (default 30) pooled connections;
+  tune per deployment size.
+
+## License
+
+MIT
