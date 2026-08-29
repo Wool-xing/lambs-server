@@ -63,7 +63,9 @@ func primaryDatasource(dss []map[string]interface{}) map[string]interface{} {
 }
 
 // normalizeDatasources assigns stable ids and a single is_primary marker.
-func normalizeDatasources(dss []map[string]interface{}) []map[string]interface{} {
+// Save-time format gate: scheme whitelist + URL shape only — no dialing.
+// Connectivity stays with the 测试连接 button (QA feedback 2026-08-29).
+func normalizeDatasources(dss []map[string]interface{}) ([]map[string]interface{}, error) {
 	hasPrimary := false
 	for i, d := range dss {
 		if id, _ := d["id"].(string); id == "" {
@@ -72,11 +74,34 @@ func normalizeDatasources(dss []map[string]interface{}) []map[string]interface{}
 		if b, _ := d["is_primary"].(bool); b {
 			hasPrimary = true
 		}
+		if raw, _ := d["dsn"].(string); raw != "" && raw != "—" {
+			if err := checkDSNShape(raw); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if !hasPrimary && len(dss) > 0 {
 		dss[0]["is_primary"] = true
 	}
-	return dss
+	return dss, nil
+}
+
+// checkDSNShape validates scheme + "://" structure without dialing.
+func checkDSNShape(dsn string) error {
+	idx := strings.Index(dsn, "://")
+	if idx <= 0 {
+		return fmt.Errorf("数据源格式不正确：缺少类型前缀，如 postgres:// 或 mysql://")
+	}
+	scheme := strings.ToLower(dsn[:idx])
+	if i := strings.Index(scheme, "+"); i > 0 {
+		scheme = scheme[:i]
+	}
+	switch scheme {
+	case "postgres", "postgresql", "sqlite", "mysql", "mongodb", "mongo",
+		"redis", "http", "https", "qdrant", "mssql", "sqlserver":
+		return nil
+	}
+	return fmt.Errorf("数据源格式不正确：不支持的类型 %s", scheme)
 }
 
 // resolveDatasource returns the dsn for the requested source id.
@@ -448,7 +473,12 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	if len(dss) == 0 && p.DSN != "" && p.DSN != "—" {
 		dss = []map[string]interface{}{{"id": "ds1", "name": "主数据源", "type": p.DB, "dsn": p.DSN, "is_primary": true}}
 	}
-	dss = normalizeDatasources(dss)
+	var dssErr error
+	dss, dssErr = normalizeDatasources(dss)
+	if dssErr != nil {
+		auth.JSONErr(w, 400, dssErr.Error())
+		return
+	}
 	dsJSON := "[]"
 	if b, err := json.Marshal(dss); err == nil {
 		dsJSON = string(b)
@@ -617,7 +647,11 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 		dsJSON = curDS.String
 	}
 	if hasDS && r.Header.Get("X-Role") == "super_admin" {
-		dss := normalizeDatasources(parseDatasources(p.Datasources))
+		dss, err := normalizeDatasources(parseDatasources(p.Datasources))
+		if err != nil {
+			auth.JSONErr(w, 400, err.Error())
+			return
+		}
 		if prim := primaryDatasource(dss); prim != nil {
 			if s, ok := prim["dsn"].(string); ok {
 				p.DSN = s

@@ -145,6 +145,7 @@ func TestResetPassword(t *testing.T) {
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("X-User-ID", "admin")
 		r.Header.Set("X-Username", "admin")
+		r.Header.Set("X-Role", "super_admin")
 		w := httptest.NewRecorder()
 		ResetPassword(w, r, "11111111-2222-3333-4444-555555555555")
 		return w

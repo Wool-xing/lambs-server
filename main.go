@@ -575,7 +575,9 @@ func newMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/users", sa(handlers.CreateUser))
 	mux.HandleFunc("PUT /api/users/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handlers.UpdateUser(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("DELETE /api/users/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handlers.DeleteUser(w, r, r.PathValue("id")) }))
-	mux.HandleFunc("POST /api/users/{id}/reset-password", sa(func(w http.ResponseWriter, r *http.Request) { handlers.ResetPassword(w, r, r.PathValue("id")) }))
+	// Plain auth at the route: super_admin resets anyone; project_admin only
+	// users sharing a project (handler-internal check, QA 2026-08-29).
+	mux.HandleFunc("POST /api/users/{id}/reset-password", a(func(w http.ResponseWriter, r *http.Request) { handlers.ResetPassword(w, r, r.PathValue("id")) }))
 
 	// Gate
 	mux.HandleFunc("GET /api/gate/check", a(gate.HandleCheck))
@@ -609,6 +611,7 @@ func newMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/notifications", a(handlers.ListNotifications))
 	mux.HandleFunc("POST /api/notifications/{nid}/read", a(func(w http.ResponseWriter, r *http.Request) { handlers.ReadNotification(w, r, r.PathValue("nid")) }))
 	mux.HandleFunc("POST /api/notifications/read-all", a(handlers.ReadAllNotifications))
+	mux.HandleFunc("DELETE /api/notifications", a(handlers.ClearNotifications))
 	mux.HandleFunc("DELETE /api/notifications/{nid}", a(func(w http.ResponseWriter, r *http.Request) { handlers.DeleteNotification(w, r, r.PathValue("nid")) }))
 
 	// System

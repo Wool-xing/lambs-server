@@ -291,3 +291,44 @@ func TestRefreshAllReal(t *testing.T) {
 		t.Errorf("ra1 users_count = %d, want 4", uc)
 	}
 }
+
+// TestCreateProjectDSNValidation — save-time format gate (QA feedback 2026-08-29:
+// bad-format DSNs used to be accepted silently; connectivity stays with
+// 测试连接, this only checks scheme whitelist + URL shape).
+func TestCreateProjectDSNValidation(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set — real PostgreSQL verification skipped")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`DELETE FROM projects WHERE id IN ('v-bad','v-good')`)
+
+	create := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		CreateProject(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	if code, _ := create(`{"id":"v-bad","name":"坏格式","db_type":"MySQL","dsn":"not-a-url"}`); code != 400 {
+		t.Errorf("scheme-less DSN: code = %d, want 400", code)
+	}
+	if code, _ := create(`{"id":"v-bad","name":"坏格式","db_type":"MySQL","dsn":"oracle://u:p@h:1521/x"}`); code != 400 {
+		t.Errorf("unknown scheme: code = %d, want 400", code)
+	}
+	if code, body := create(`{"id":"v-good","name":"好格式","db_type":"MySQL","dsn":"mysql://lambs:pw@127.0.0.1:3307/lambs_mysql_test"}`); code != 201 {
+		t.Logf("valid create body: %s", body)
+		t.Errorf("valid DSN: code = %d, want 201", code)
+	}
+	mustExec(`DELETE FROM projects WHERE id IN ('v-bad','v-good')`)
+}

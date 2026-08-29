@@ -157,7 +157,7 @@ func TestCheckAccessHelpers(t *testing.T) {
 func TestListProjectsFilters(t *testing.T) {
 	mustExec := puFixture(t)
 	mustExec(`INSERT INTO projects (id, name, repo, icon_url, users_count, status, sort_order, is_pinned, dsn, datasources, services, tags) VALUES
-		('lp-p1','apples','a','http://x/i.png',2,'online',3,true,'pg://x','[{"id":"ds1","name":"主","dsn":"pg://x","type":"PostgreSQL","is_primary":true}]'::jsonb,'[{"name":"svc1"}]'::jsonb,'["t1"]'::jsonb),
+		('lp-p1','apples','a','http://x/i.png',2,'online',3,true,'postgres://x','[{"id":"ds1","name":"主","dsn":"postgres://x","type":"PostgreSQL","is_primary":true}]'::jsonb,'[{"name":"svc1"}]'::jsonb,'["t1"]'::jsonb),
 		('lp-p2','bananas','b','',9,'offline',1,false,'—','"[]"'::jsonb,'"[]"'::jsonb,'"[\"t1\",\"t2\"]"'::jsonb),
 		('lp-p3','carrots','c','',5,'maintenance',2,false,'','[]'::jsonb,'[]'::jsonb,'[]'::jsonb)`)
 	mustExec(`INSERT INTO users (id, username, role, project_access) VALUES
@@ -281,7 +281,7 @@ func TestGetProjectViewerAndStats(t *testing.T) {
 	mustExec := puFixture(t)
 	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
 	mustExec(`INSERT INTO projects (id, name, repo, db_type, dsn, tags, features, datasources, services) VALUES
-		('gp-v','取项目','gp','PostgreSQL',$1,'"[\"a\"]"'::jsonb,'[]'::jsonb,'[{"id":"ds1","name":"主","dsn":"pg://x"}]'::jsonb,'[{"name":"svc"}]'::jsonb),
+		('gp-v','取项目','gp','PostgreSQL',$1,'"[\"a\"]"'::jsonb,'[]'::jsonb,'[{"id":"ds1","name":"主","dsn":"postgres://x"}]'::jsonb,'[{"name":"svc"}]'::jsonb),
 		('gp-nodsn','无源','gp2','SQLite','—','[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)`, dsn)
 	mustExec(`INSERT INTO users (id, username, role, project_access) VALUES
 		('10000000-0000-0000-0000-000000000007','gp-viewer','viewer','["gp-v"]')`)
@@ -408,13 +408,13 @@ func TestCreateProjectModes(t *testing.T) {
 	}
 
 	// datasources as JSON string form
-	w = post(`{"id":"cp-str","name":"字符串","repo":"cp-str","status":"offline","datasources":"[{\"id\":\"ds9\",\"name\":\"旧\",\"dsn\":\"pg://old\",\"type\":\"PostgreSQL\"}]"}`)
+	w = post(`{"id":"cp-str","name":"字符串","repo":"cp-str","status":"offline","datasources":"[{\"id\":\"ds9\",\"name\":\"旧\",\"dsn\":\"postgres://old\",\"type\":\"PostgreSQL\"}]"}`)
 	if w.Code != 200 && w.Code != 201 {
 		t.Fatalf("str create = %d (body %s)", w.Code, w.Body.String())
 	}
 	mustExecRow(`SELECT dsn FROM projects WHERE id='cp-str'`, &dsnStr)
-	if dsnStr != "pg://old" {
-		t.Errorf("string-form dsn = %q, want pg://old", dsnStr)
+	if dsnStr != "postgres://old" {
+		t.Errorf("string-form dsn = %q, want postgres://old", dsnStr)
 	}
 
 	// services dedupe by name
@@ -449,7 +449,7 @@ func TestCreateProjectModes(t *testing.T) {
 func TestUpdateProjectGuards(t *testing.T) {
 	mustExec := puFixture(t)
 	mustExec(`INSERT INTO projects (id, name, repo, dsn, db_type, startup_command, service_name, backup_interval_hours, backup_retention_days, datasources, services) VALUES
-		('up-p','原名','up','pg://orig','PostgreSQL','orig-cmd','orig-svc',5,10,'[{"id":"ds1","name":"主","dsn":"pg://orig","type":"PostgreSQL","is_primary":true}]'::jsonb,'[{"name":"old-svc"}]'::jsonb)`)
+		('up-p','原名','up','postgres://orig','PostgreSQL','orig-cmd','orig-svc',5,10,'[{"id":"ds1","name":"主","dsn":"postgres://orig","type":"PostgreSQL","is_primary":true}]'::jsonb,'[{"name":"old-svc"}]'::jsonb)`)
 	mustExec(`INSERT INTO users (id, username, role, project_access) VALUES
 		('10000000-0000-0000-0000-000000000020','up-pa','project_admin','["up-p"]'),
 		('10000000-0000-0000-0000-000000000021','up-pa2','project_admin','[]')`)
@@ -499,7 +499,7 @@ func TestUpdateProjectGuards(t *testing.T) {
 		}
 	}
 	mustExecRow(`SELECT dsn, startup_command, service_name, port FROM projects WHERE id='up-p'`, &dsnStr, &cmd, &svc, &port)
-	if dsnStr != "pg://orig" || cmd != "orig-cmd" || svc != "orig-svc" || port == "12345" {
+	if dsnStr != "postgres://orig" || cmd != "orig-cmd" || svc != "orig-svc" || port == "12345" {
 		t.Errorf("stripped fields leaked: dsn=%q cmd=%q svc=%q port=%q", dsnStr, cmd, svc, port)
 	}
 
