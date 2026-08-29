@@ -69,4 +69,4 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    http.server.ThreadingHTTPServer(('100.126.18.126', 3901), Handler).serve_forever()
+    http.server.ThreadingHTTPServer(('0.0.0.0', 3901), Handler).serve_forever()
