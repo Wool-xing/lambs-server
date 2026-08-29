@@ -34,7 +34,10 @@ func TestNormalizeDatasources(t *testing.T) {
 		{"name": "a"},
 		{"name": "b", "id": "custom"},
 	}
-	got := normalizeDatasources(in)
+	got, err := normalizeDatasources(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
 	if got[0]["id"] != "ds1" {
 		t.Fatalf("missing id not filled: %v", got[0])
 	}
@@ -46,7 +49,10 @@ func TestNormalizeDatasources(t *testing.T) {
 	}
 	// primary already set → not duplicated
 	in2 := []map[string]interface{}{{"name": "a", "is_primary": true}, {"name": "b"}}
-	got2 := normalizeDatasources(in2)
+	got2, err := normalizeDatasources(in2)
+	if err != nil {
+		t.Fatalf("normalize2: %v", err)
+	}
 	if got2[1]["is_primary"] == true {
 		t.Fatalf("second source wrongly marked primary: %v", got2)
 	}

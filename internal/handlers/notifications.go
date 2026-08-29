@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -154,4 +155,22 @@ func DeleteNotification(w http.ResponseWriter, r *http.Request, nid string) {
 	}
 	db.DB.Exec("DELETE FROM notifications WHERE id=$1", nid)
 	auth.JSONOK(w, map[string]string{"deleted": nid})
+}
+
+// ClearNotifications deletes every notification the caller can see
+// (same visibility rule as the list — QA feedback 2026-08-29: the center
+// had no way to clear the backlog).
+func ClearNotifications(w http.ResponseWriter, r *http.Request) {
+	where := ""
+	var args []interface{}
+	if vis, visArgs := visibleClause(r); vis != "" {
+		where = " WHERE " + vis
+		args = append(args, visArgs...)
+	}
+	if _, err := db.DB.Exec("DELETE FROM notifications"+where, args...); err != nil {
+		log.Printf("ClearNotifications: %v", err)
+		auth.JSONErr(w, 500, "清空失败")
+		return
+	}
+	auth.JSONOK(w, map[string]string{"cleared": "ok"})
 }
