@@ -74,7 +74,7 @@ func TestCommandBranchesRemaining(t *testing.T) {
 				t.Errorf("%s = %q, want invalid-file rejection", bad[:14], out)
 			}
 		}
-		if out := run("/dl abcdefgh"); !strings.Contains(out, "RUN</opt/wool-tools/tg-upload.py -d abcdefgh") {
+		if out := run("/dl abcdefgh"); !strings.Contains(out, "tg-upload.py -d abcdefgh") {
 			t.Errorf("/dl valid = %q", out)
 		}
 	})

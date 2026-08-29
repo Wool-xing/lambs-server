@@ -1,0 +1,16 @@
+[Unit]
+Description=Lambs Server (Go)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+EnvironmentFile=/home/ubuntu/apps/lambs-server/.env
+Environment="PORT=3602"
+ExecStart=/usr/local/bin/lambs-server
+Restart=always
+RestartSec=5
+MemoryMax=100M
+
+[Install]
+WantedBy=multi-user.target
