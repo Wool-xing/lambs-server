@@ -121,6 +121,6 @@ esac
 echo ""
 echo "=========================================="
 echo "  部署完成"
-echo "  Lambs:   https://wool.cc.cd/Lambs/"
-echo "  API:     https://wool.cc.cd/Lambs/api/health"
+echo "  Lambs:   https://YOUR_DOMAIN/Lambs/"
+echo "  API:     https://YOUR_DOMAIN/Lambs/api/health"
 echo "=========================================="
