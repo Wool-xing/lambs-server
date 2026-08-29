@@ -8,6 +8,7 @@
 package main
 
 import (
+	"path/filepath"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -47,8 +48,17 @@ func init() {
 	}
 }
 
+// toolsDir resolves the TG tool scripts directory (default /opt/wool-tools,
+// override with TG_TOOLS_DIR).
+func toolsDir() string {
+	if d := os.Getenv("TG_TOOLS_DIR"); d != "" {
+		return d
+	}
+	return "/opt/wool-tools"
+}
+
 func loadSecrets() {
-	data, err := os.ReadFile("/opt/wool-tools/.tg-secrets")
+	data, err := os.ReadFile(filepath.Join(toolsDir(), ".tg-secrets"))
 	if err != nil {
 		log.Fatal("cannot read secrets:", err)
 	}
@@ -232,7 +242,7 @@ func handleCommand(chatID int64, text string) {
 		bot.send(chatID, fmt.Sprintf("App1 Lambs\n%s\n%s\n\nWeb1 Wool\n%s\n%s", wm, ws, am, as))
 
 	case text == "/backup":
-		out := bot.run("/opt/wool-tools/backup-lambs.sh 2>&1")
+		out := bot.run(filepath.Join(toolsDir(), "backup-lambs.sh") + " 2>&1")
 		if len(out) > 3800 {
 			out = out[:3800]
 		}
@@ -303,14 +313,14 @@ func handleCommand(chatID int64, text string) {
 			}) >= 0 {
 				bot.send(chatID, "无效的文件ID")
 			} else {
-				bot.send(chatID, bot.run(fmt.Sprintf("/opt/wool-tools/tg-upload.py -d %s -o /tmp/dl-%s 2>&1", fid, fid)))
+				bot.send(chatID, bot.run(fmt.Sprintf(filepath.Join(toolsDir(), "tg-upload.py")+" -d %s -o /tmp/dl-%s 2>&1", fid, fid)))
 			}
 		} else {
 			bot.send(chatID, "用法: /dl <文件ID>")
 		}
 
 	case strings.HasPrefix(text, "/storage"):
-		raw := bot.run("cat /opt/wool-tools/upload-log.jsonl 2>/dev/null || echo empty")
+		raw := bot.run("cat " + filepath.Join(toolsDir(), "upload-log.jsonl") + " 2>/dev/null || echo empty")
 		if raw == "empty" {
 			bot.send(chatID, "暂无存储文件")
 			return
