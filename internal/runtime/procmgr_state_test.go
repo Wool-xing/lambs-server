@@ -148,7 +148,7 @@ func TestAttachDetachServicesRoundTrip(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`INSERT INTO projects (id, name, services) VALUES
 		('svc-proj-a', 'A', '[{"name":"svc-x","start_cmd":"true","stop_cmd":"true"}]'),
 		('svc-proj-b', 'B', '[{"name":"svc-x","start_cmd":"true","stop_cmd":"true"}]')`)
@@ -225,7 +225,7 @@ func TestHealthOnceRestartsDownProject(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`DROP TABLE IF EXISTS notifications`)
 	mustExec(`CREATE TABLE notifications (id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT, content TEXT, is_read BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT now())`)
 	mustExec(`INSERT INTO projects (id, name, status, startup_command) VALUES

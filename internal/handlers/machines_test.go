@@ -30,7 +30,7 @@ func TestMachinesCRUD(t *testing.T) {
 		tags JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online',
 		override JSONB NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '',
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		last_check_at TIMESTAMPTZ)`); err != nil {
+		last_check_at TIMESTAMPTZ, ssh_user TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestAllocHost(t *testing.T) {
 		tags JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online',
 		override JSONB NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '',
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		last_check_at TIMESTAMPTZ)`); err != nil {
+		last_check_at TIMESTAMPTZ, ssh_user TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	seed := `INSERT INTO machines (id, role, ts_ip, os, mem_gb, disk_gb, cpu_cores, status) VALUES
@@ -158,7 +158,7 @@ func TestReconcileOffline(t *testing.T) {
 		tags JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online',
 		override JSONB NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '',
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		last_check_at TIMESTAMPTZ)`); err != nil {
+		last_check_at TIMESTAMPTZ, ssh_user TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	// TEST-NET-1 (RFC 5737) — non-routable, dial must time out

@@ -37,7 +37,7 @@ func TestProjectsCRUD(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 
 	sa := func(r *http.Request) {
 		r.Header.Set("X-User-ID", "admin-uid")
@@ -148,7 +148,7 @@ func TestTestConnectionSQLite(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	sqliteFile := t.TempDir() + "/proj.db"
 	os.WriteFile(sqliteFile, []byte("x"), 0600)
 	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('tc-proj', '连接测试', $1)`, "sqlite:///"+sqliteFile)
@@ -196,7 +196,7 @@ func TestSyncProjectReal(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects CASCADE; DROP TABLE IF EXISTS users CASCADE;`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`CREATE TABLE users (id INT PRIMARY KEY, name TEXT)`)
 	mustExec(`INSERT INTO users VALUES (1,'a'),(2,'b'),(3,'c')`)
 	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('sync-proj', '同步测试', $1)`, dsn)
@@ -233,7 +233,7 @@ func TestProjectStatsCounts(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects CASCADE; DROP TABLE IF EXISTS users CASCADE;`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`CREATE TABLE users (id INT PRIMARY KEY, name TEXT)`)
 	mustExec(`INSERT INTO projects (id, name, status) VALUES ('p1','在线','online'),('p2','离线','offline'),('p3','维护','maintenance')`)
 	mustExec(`INSERT INTO users VALUES (1,'a'),(2,'b')`)
@@ -272,7 +272,7 @@ func TestRefreshAllReal(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects CASCADE; DROP TABLE IF EXISTS users CASCADE;`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`CREATE TABLE users (id INT PRIMARY KEY, name TEXT)`)
 	mustExec(`INSERT INTO users VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d')`)
 	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('ra1','刷新1', $1), ('ra2','无源','—')`, dsn)
@@ -309,7 +309,7 @@ func TestCreateProjectDSNValidation(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects CASCADE`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo TEXT, description TEXT, icon_url TEXT, icon_thumb TEXT, stack TEXT, port TEXT, db_type TEXT, dsn TEXT, users_count INT DEFAULT 0, status TEXT DEFAULT 'online', sort_order INT DEFAULT 0, is_pinned BOOLEAN DEFAULT false, icon_cls TEXT, base_path TEXT, backend_url TEXT, service_name TEXT, startup_command TEXT, health_url TEXT, tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`DELETE FROM projects WHERE id IN ('v-bad','v-good')`)
 
 	create := func(body string) (int, string) {

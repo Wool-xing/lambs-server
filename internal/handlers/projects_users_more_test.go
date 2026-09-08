@@ -33,7 +33,8 @@ const projectsDDL = `CREATE TABLE projects (
 	datasources JSONB DEFAULT '[]',
 	services JSONB DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	backup_interval_hours INT NOT NULL DEFAULT 0, backup_retention_days INT NOT NULL DEFAULT 0)`
+	backup_interval_hours INT NOT NULL DEFAULT 0, backup_retention_days INT NOT NULL DEFAULT 0,
+	host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`
 
 const usersDDL = `CREATE TABLE users (
 	id UUID PRIMARY KEY, username TEXT UNIQUE, name TEXT, email TEXT UNIQUE,

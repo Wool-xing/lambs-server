@@ -20,7 +20,7 @@ import (
 
 // Sync regenerates the managed nginx config on Web1 and reloads nginx.
 func Sync() {
-	rows, err := db.DB.Query("SELECT name, base_path, COALESCE(backend_url,''), COALESCE(port,''), COALESCE(host,'') FROM projects WHERE base_path IS NOT NULL AND base_path != ''")
+	rows, err := db.DB.Query("SELECT name, base_path, COALESCE(backend_url,''), COALESCE(port,''), COALESCE(host,''), COALESCE(services::text,'[]') FROM projects WHERE base_path IS NOT NULL AND base_path != ''")
 	if err != nil {
 		return
 	}
@@ -28,7 +28,11 @@ func Sync() {
 	var projects []models.Project
 	for rows.Next() {
 		var p models.Project
-		rows.Scan(&p.Name, &p.BasePath, &p.BackendURL, &p.Port, &p.Host)
+		var svcRaw string
+		rows.Scan(&p.Name, &p.BasePath, &p.BackendURL, &p.Port, &p.Host, &svcRaw)
+		var svcs []models.ServiceComponent
+		json.Unmarshal([]byte(svcRaw), &svcs)
+		p.Services = svcs
 		projects = append(projects, p)
 	}
 	conf := buildConfig(projects)
@@ -232,6 +236,40 @@ location /%s {
     try_files $uri $uri/ /%s/index.html;
 }`, name, bp, bp, bp, bp,
 			bp, bp, apiTarget, bp, bp, bp))
+		// 多组件：带 port 的服务生成独立子路径反代（/<bp>-<svc>/api/）
+		svcList, _ := p.Services.([]models.ServiceComponent)
+		for _, svc := range svcList {
+			if svc.Port == "" || svc.Name == "" {
+				continue
+			}
+			svcHost := svc.Host
+			if svcHost == "" {
+				svcHost = p.Host
+			}
+			svcTarget := ""
+			if svcHost != "" && svcHost != "lambs" {
+				var sIP string
+				if err := db.DB.QueryRow("SELECT COALESCE(ts_ip,'') FROM machines WHERE id=$1", svcHost).Scan(&sIP); err == nil && sIP != "" {
+					svcTarget = "http://" + sIP + ":" + svc.Port
+				}
+			}
+			if svcTarget == "" {
+				svcTarget = "http://" + appHost + ":" + svc.Port
+			}
+			svcBP := bp + "-" + svc.Name
+			if !bpRe.MatchString(svcBP) {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf(`
+# %s/%s — Lambs managed component
+location /%s/api/ {
+    auth_request /lambs-gate-%s;
+    proxy_pass %s/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}`, name, svc.Name, svcBP, bp, svcTarget))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

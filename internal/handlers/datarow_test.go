@@ -206,7 +206,7 @@ func TestGetProject(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`INSERT INTO projects (id, name, icon_url) VALUES ('gp-proj','取项目','http://x/icon.png')`)
 
 	get := func(role, userID string) *httptest.ResponseRecorder {

@@ -116,7 +116,7 @@ func TestCreateBackupPostgres(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	// The project DSN targets the same postgres the fixture lives in —
 	// pg_dump dumps a real database.
 	mustExec(`INSERT INTO projects (id, name, dsn) VALUES ('pg-proj', 'PG备份', $1)`, dsn)
@@ -183,7 +183,7 @@ func TestRestoreBackupSQLiteRoundTrip(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 
 	// Source sqlite with real data.
 	srcPath := filepath.Join(t.TempDir(), "src.db")

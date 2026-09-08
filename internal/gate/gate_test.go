@@ -70,7 +70,7 @@ func TestHandleCheckIntegration(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects;`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, base_path TEXT, status TEXT)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, base_path TEXT, status TEXT, port TEXT, backend_url TEXT, host TEXT NOT NULL DEFAULT '', services JSONB DEFAULT '[]')`)
 	mustExec(`INSERT INTO projects (id, name, base_path, status) VALUES
 		('p1', 'offline proj', '/off', 'offline'),
 		('p2', 'maint proj', '/maint', 'maintenance'),
@@ -178,7 +178,7 @@ func TestHandleCheckInternalHappyPath(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS projects;`)
-	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, base_path TEXT, status TEXT)`)
+	mustExec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, base_path TEXT, status TEXT, port TEXT, backend_url TEXT, host TEXT NOT NULL DEFAULT '', services JSONB DEFAULT '[]')`)
 	mustExec(`INSERT INTO projects (id, name, base_path, status) VALUES
 		('ci-ok', 'online proj', '/ci-ok', 'online'),
 		('ci-off', 'offline proj', '/ci-off', 'offline')`)

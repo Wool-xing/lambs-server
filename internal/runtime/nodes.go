@@ -127,6 +127,7 @@ func RegistrySnapshot() []NodeSnapshot {
 		case "laptop":
 			agentMu.RLock()
 			snap = agentNode
+			snap.Name = "laptop" // 注册表 id 为准（agent 上报的是主机名）
 			agentMu.RUnlock()
 		default:
 			snap = NodeSnapshot{

@@ -65,7 +65,7 @@ func rbacFixture(t *testing.T) func(string, ...interface{}) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`INSERT INTO users (id, username, name, email, password_hash, role, status, token_version, project_access) VALUES
 		('11111111-1111-1111-1111-111111111111','rbac_sa','超管','sa@t.c','x','super_admin','active',1,'["all"]'),
 		('22222222-2222-2222-2222-222222222222','rbac_pa','管理员','pa@t.c','x','project_admin','active',1,'["proj-a"]'),

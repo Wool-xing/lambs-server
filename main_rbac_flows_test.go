@@ -178,7 +178,7 @@ func TestRegisterFirstLoginEmptyProjects(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	// Existing account makes the new registration a viewer, not super_admin.
 	mustExec(`INSERT INTO users (id, username, name, email, password_hash, role, status, project_access) VALUES
 		('aaaaaaaa-0000-0000-0000-000000000099','existing','已有','exist@t.c','x','super_admin','active','["all"]')`)
