@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"lambs-server-go/internal/db"
 )
 
 // NodeSnapshot is one polled machine's metric snapshot.
@@ -97,6 +99,46 @@ func StartNodeMonitor() {
 			nodePollOnce()
 		}
 	}()
+}
+
+// RegistrySnapshot returns one snapshot per registered machine. Wool and the
+// Windows agent keep live polled metrics; other machines fall back to the
+// registry's static capacity with online status (B5c — replaces the old
+// hardcoded two-node list).
+func RegistrySnapshot() []NodeSnapshot {
+	rows, err := db.DB.Query(`SELECT id, COALESCE(status,'online'), COALESCE(mem_gb,0), COALESCE(disk_gb,0) FROM machines ORDER BY id`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []NodeSnapshot{}
+	for rows.Next() {
+		var id, status string
+		var memGB, diskGB int
+		if rows.Scan(&id, &status, &memGB, &diskGB) != nil {
+			continue
+		}
+		var snap NodeSnapshot
+		switch id {
+		case "wool":
+			woolMu.RLock()
+			snap = woolNode
+			woolMu.RUnlock()
+		case "laptop":
+			agentMu.RLock()
+			snap = agentNode
+			agentMu.RUnlock()
+		default:
+			snap = NodeSnapshot{
+				Name:       id,
+				Online:     status == "online",
+				MemTotalMB: memGB * 1024,
+				DiskTotalGB: float64(diskGB),
+			}
+		}
+		out = append(out, snap)
+	}
+	return out
 }
 
 // WoolSnapshot returns the last polled wool metrics. Read-only.

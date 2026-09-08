@@ -18,6 +18,7 @@ import (
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/deploy"
 	"lambs-server-go/internal/models"
 	"lambs-server-go/internal/nginx"
 	"lambs-server-go/internal/notify"
@@ -47,6 +48,60 @@ func parseDatasources(raw interface{}) []map[string]interface{} {
 		}
 	}
 	return []map[string]interface{}{}
+}
+
+// parseServiceComponents converts the services payload into typed components,
+// tolerating missing fields. Accepts both []interface{} (fresh JSON decode)
+// and []map[string]interface{} (post-normalization).
+func parseServiceComponents(raw interface{}) []models.ServiceComponent {
+	out := []models.ServiceComponent{}
+	visit := func(m map[string]interface{}) {
+		if m == nil {
+			return
+		}
+		svc := models.ServiceComponent{}
+		if v, ok := m["name"].(string); ok {
+			svc.Name = v
+		}
+		if v, ok := m["type"].(string); ok {
+			svc.Type = v
+		}
+		if v, ok := m["host"].(string); ok {
+			svc.Host = v
+		}
+		if v, ok := m["port"].(string); ok {
+			svc.Port = v
+		}
+		if v, ok := m["git_url"].(string); ok {
+			svc.GitURL = v
+		}
+		if v, ok := m["start_cmd"].(string); ok {
+			svc.StartCmd = v
+		}
+		if v, ok := m["stop_cmd"].(string); ok {
+			svc.StopCmd = v
+		}
+		if svc.Name == "" {
+			return
+		}
+		if svc.Type == "" {
+			svc.Type = "backend"
+		}
+		out = append(out, svc)
+	}
+	switch arr := raw.(type) {
+	case []interface{}:
+		for _, item := range arr {
+			if m, ok := item.(map[string]interface{}); ok {
+				visit(m)
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range arr {
+			visit(m)
+		}
+	}
+	return out
 }
 
 // primaryDatasource returns the is_primary source, falling back to the first.
@@ -187,7 +242,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 	sortBy := r.URL.Query().Get("sort_by")
 	userRole := r.Header.Get("X-Role")
 	userID := r.Header.Get("X-User-ID")
-	query := "SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,''), COALESCE(EXTRACT(EPOCH FROM updated_at)::int,0), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE 1=1"
+	query := "SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(created_at::text,''), COALESCE(updated_at::text,''), COALESCE(EXTRACT(EPOCH FROM updated_at)::int,0), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(host,''), COALESCE(git_url,''), COALESCE(auto_update,false) FROM projects WHERE 1=1"
 	var args []interface{}
 	argIdx := 0
 	if statusFilter != "" && statusFilter != "all" {
@@ -238,7 +293,7 @@ func ListProjects(w http.ResponseWriter, r *http.Request) {
 		var p models.Project
 		var updatedUnix int
 		var tagsRaw, featuresRaw, tabsRaw, dsRaw, svcRaw sql.NullString
-		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &p.CreatedAt, &p.UpdatedAt, &updatedUnix, &p.BackupIntervalHours, &p.BackupRetentionDays)
+		rows.Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &p.CreatedAt, &p.UpdatedAt, &updatedUnix, &p.BackupIntervalHours, &p.BackupRetentionDays, &p.Host, &p.GitURL, &p.AutoUpdate)
 		// Icon rides as a cached image URL, not megabytes of base64 in JSON.
 		if p.IconURL != "" {
 			p.IconURL = fmt.Sprintf("/api/projects/%s/logo?v=%d", p.ID, updatedUnix)
@@ -339,8 +394,8 @@ func GetProject(w http.ResponseWriter, r *http.Request, id string) {
 	var p models.Project
 	var updatedUnix int
 	var tagsRaw, featuresRaw, tabsRaw, dsRaw, svcRaw sql.NullString
-	err := db.DB.QueryRow("SELECT id, name, COALESCE(repo,''), COALESCE(description,''), COALESCE(icon_url,''), COALESCE(stack,''), COALESCE(port,''), COALESCE(db_type,''), COALESCE(dsn,''), COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(EXTRACT(EPOCH FROM updated_at)::int,0), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0) FROM projects WHERE id=$1", id).
-		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &updatedUnix, &p.BackupIntervalHours, &p.BackupRetentionDays)
+	err := db.DB.QueryRow("SELECT id, name, COALESCE(repo,''), COALESCE(description,''), COALESCE(icon_url,''), COALESCE(stack,''), COALESCE(port,''), COALESCE(db_type,''), COALESCE(dsn,''), COALESCE(users_count,0), status, sort_order, COALESCE(is_pinned,false), COALESCE(icon_cls,''), COALESCE(base_path,''), COALESCE(backend_url,''), COALESCE(service_name,''), COALESCE(startup_command,''), COALESCE(health_url,''), COALESCE(tags::text,'[]'), COALESCE(offline_msg,''), COALESCE(features::text,'[]'), COALESCE(tabs::text,'[]'), COALESCE(datasources::text,'[]'), COALESCE(services::text,'[]'), COALESCE(EXTRACT(EPOCH FROM updated_at)::int,0), COALESCE(backup_interval_hours,0), COALESCE(backup_retention_days,0), COALESCE(host,''), COALESCE(git_url,''), COALESCE(auto_update,false) FROM projects WHERE id=$1", id).
+		Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &tagsRaw, &p.OfflineMsg, &featuresRaw, &tabsRaw, &dsRaw, &svcRaw, &updatedUnix, &p.BackupIntervalHours, &p.BackupRetentionDays, &p.Host, &p.GitURL, &p.AutoUpdate)
 	if err != nil {
 		auth.JSONErr(w, 404, "项目不存在")
 		return
@@ -468,6 +523,22 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 			tagsJSON = string(b)
 		}
 	}
+	// New projects default into the scheduled backup pool (24h); an explicit
+	// 0 still opts out.
+	if p.BackupIntervalHours == 0 {
+		p.BackupIntervalHours = 24
+	}
+	// Auto-provision an isolated database on lambs postgres when a postgres
+	// project is created without an explicit DSN. Runs before datasource
+	// derivation so the generated DSN mirrors into the legacy columns.
+	if p.DB == "postgres" && (p.DSN == "" || p.DSN == "—") {
+		dsn, err := deploy.CreateDatabase(p.ID)
+		if err != nil {
+			auth.JSONErr(w, 400, "自动建库失败: "+err.Error())
+			return
+		}
+		p.DSN = dsn
+	}
 	// Datasources: explicit array wins; otherwise derive one from legacy dsn.
 	dss := parseDatasources(p.Datasources)
 	if len(dss) == 0 && p.DSN != "" && p.DSN != "—" {
@@ -513,14 +584,21 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 			p.Port = fmt.Sprintf("%d", port)
 		}
 	}
+	// Deployment target: explicit machine id or auto-pick from the registry.
+	host, err := allocHost(p.Host)
+	if err != nil {
+		auth.JSONErr(w, 400, err.Error())
+		return
+	}
+	p.Host = host
 	iconThumb := ""
 	if p.IconURL != "" {
 		if t, err := makeThumb(p.IconURL, 128); err == nil && t != p.IconURL {
 			iconThumb = t
 		}
 	}
-	err := db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, icon_thumb, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, services, backup_interval_hours, backup_retention_days) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,$27,$28) RETURNING id",
-		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, dsJSON, svcJSON, p.BackupIntervalHours, p.BackupRetentionDays).Scan(&p.ID)
+	err = db.DB.QueryRow("INSERT INTO projects (id, name, repo, description, icon_url, icon_thumb, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, services, backup_interval_hours, backup_retention_days, host, git_url, auto_update) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,$27,$28,$29,$30,$31) RETURNING id",
+		p.ID, p.Name, p.Repo, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.UserCount, p.Status, p.Order, p.Pinned, p.IconCls, p.BasePath, p.BackendURL, p.ServiceName, p.StartupCommand, p.HealthURL, tagsJSON, p.OfflineMsg, featuresJSON, tabsJSON, dsJSON, svcJSON, p.BackupIntervalHours, p.BackupRetentionDays, p.Host, p.GitURL, p.AutoUpdate).Scan(&p.ID)
 	if err != nil {
 		log.Printf("CreateProject insert: %v", err)
 		auth.JSONErr(w, 400, "创建失败")
@@ -532,11 +610,50 @@ func CreateProject(w http.ResponseWriter, r *http.Request) {
 	// A newly created online project goes through the same lifecycle as a
 	// status switch to online: shared services first, then its own process.
 	if p.Status == "online" {
-		go runtime.ProcMgr.AttachServices(p.ID)
-		go runtime.TCPProxyMgr.Start(p.ID)
-		go runtime.ProcMgr.Start(p.ID)
+		if p.Host != "" && p.Host != "lambs" {
+			// Remote target: deploy over the SSH channel (clone → systemd → start).
+			go func() {
+				comps := parseServiceComponents(p.Services)
+				var err error
+				if len(comps) > 0 {
+					err = deploy.DeployServices(p, comps)
+				} else {
+					err = deploy.DeployProject(p)
+				}
+				if err != nil {
+					log.Printf("Deploy %s: %v", p.ID, err)
+					db.DB.Exec("UPDATE projects SET offline_msg=$1 WHERE id=$2", "部署失败: "+err.Error(), p.ID)
+				}
+			}()
+		} else {
+			go runtime.ProcMgr.AttachServices(p.ID)
+			go runtime.TCPProxyMgr.Start(p.ID)
+			go runtime.ProcMgr.Start(p.ID)
+		}
 	}
 	auth.JSONCreated(w, p)
+}
+
+// UpdateProjectCode triggers a pull-and-restart cycle for a remote project
+// with health gate and automatic rollback (B4).
+func UpdateProjectCode(w http.ResponseWriter, r *http.Request, id string) {
+	var p models.Project
+	err := db.DB.QueryRow(`SELECT id, COALESCE(host,''), COALESCE(port,''), COALESCE(health_url,'') FROM projects WHERE id=$1`, id).
+		Scan(&p.ID, &p.Host, &p.Port, &p.HealthURL)
+	if err != nil {
+		auth.JSONErr(w, 404, "项目不存在")
+		return
+	}
+	if p.Host == "" || p.Host == "lambs" {
+		auth.JSONErr(w, 400, "仅远程项目支持自动更新")
+		return
+	}
+	changed, err := deploy.UpdateRemote(p)
+	if err != nil {
+		auth.JSONErr(w, 500, err.Error())
+		return
+	}
+	auth.JSONOK(w, map[string]interface{}{"id": id, "changed": changed})
 }
 
 func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
@@ -781,9 +898,34 @@ func PatchProjectStatus(w http.ResponseWriter, r *http.Request, id string) {
 	// Unified process lifecycle: shared services first (referenced by the
 	// project), then the project's own process. Reverse order on stop.
 	if next == "online" {
-		go runtime.ProcMgr.AttachServices(id)
-		go runtime.TCPProxyMgr.Start(id)
-		go runtime.ProcMgr.Start(id)
+		var host string
+		db.DB.QueryRow("SELECT COALESCE(host,'') FROM projects WHERE id=$1", id).Scan(&host)
+		if host != "" && host != "lambs" {
+			// Remote target: deploy over the SSH channel (B5d — status
+			// switches must trigger remote deployment like creation does).
+			go func() {
+				var p models.Project
+				if err := db.DB.QueryRow(`SELECT id, name, repo, description, icon_url, stack, port, db_type, dsn, users_count, status, sort_order, is_pinned, icon_cls, base_path, backend_url, service_name, startup_command, health_url, tags, offline_msg, features, tabs, datasources, services, backup_interval_hours, backup_retention_days, host, git_url FROM projects WHERE id=$1`, id).Scan(&p.ID, &p.Name, &p.Repo, &p.Desc, &p.IconURL, &p.Stack, &p.Port, &p.DB, &p.DSN, &p.UserCount, &p.Status, &p.Order, &p.Pinned, &p.IconCls, &p.BasePath, &p.BackendURL, &p.ServiceName, &p.StartupCommand, &p.HealthURL, &p.Tags, &p.OfflineMsg, &p.Features, &p.Tabs, &p.Datasources, &p.Services, &p.BackupIntervalHours, &p.BackupRetentionDays, &p.Host, &p.GitURL); err != nil {
+					log.Printf("PatchProjectStatus load project %s: %v", id, err)
+					return
+				}
+				comps := parseServiceComponents(p.Services)
+				var derr error
+				if len(comps) > 0 {
+					derr = deploy.DeployServices(p, comps)
+				} else {
+					derr = deploy.DeployProject(p)
+				}
+				if derr != nil {
+					log.Printf("Deploy %s: %v", id, derr)
+					db.DB.Exec("UPDATE projects SET offline_msg=$1 WHERE id=$2", "部署失败: "+derr.Error(), id)
+				}
+			}()
+		} else {
+			go runtime.ProcMgr.AttachServices(id)
+			go runtime.TCPProxyMgr.Start(id)
+			go runtime.ProcMgr.Start(id)
+		}
 	} else {
 		runtime.ProcMgr.Stop(id)
 		runtime.TCPProxyMgr.Stop(id)

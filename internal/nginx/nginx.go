@@ -20,7 +20,7 @@ import (
 
 // Sync regenerates the managed nginx config on Web1 and reloads nginx.
 func Sync() {
-	rows, err := db.DB.Query("SELECT name, base_path, COALESCE(backend_url,''), COALESCE(port,'') FROM projects WHERE base_path IS NOT NULL AND base_path != ''")
+	rows, err := db.DB.Query("SELECT name, base_path, COALESCE(backend_url,''), COALESCE(port,''), COALESCE(host,'') FROM projects WHERE base_path IS NOT NULL AND base_path != ''")
 	if err != nil {
 		return
 	}
@@ -28,7 +28,7 @@ func Sync() {
 	var projects []models.Project
 	for rows.Next() {
 		var p models.Project
-		rows.Scan(&p.Name, &p.BasePath, &p.BackendURL, &p.Port)
+		rows.Scan(&p.Name, &p.BasePath, &p.BackendURL, &p.Port, &p.Host)
 		projects = append(projects, p)
 	}
 	conf := buildConfig(projects)
@@ -182,7 +182,18 @@ func buildConfig(projects []models.Project) string {
 		if i := strings.LastIndex(gate, ":"); i > 0 {
 			appHost = gate[:i]
 		}
-		apiTarget := "http://" + appHost + ":" + p.Port
+		apiTarget := ""
+		// Remote projects run on their registered machine — route to its
+		// tailscale IP directly (no local TCP proxy hop).
+		if p.Host != "" && p.Host != "lambs" {
+			var tsIP string
+			if err := db.DB.QueryRow("SELECT COALESCE(ts_ip,'') FROM machines WHERE id=$1", p.Host).Scan(&tsIP); err == nil && tsIP != "" {
+				apiTarget = "http://" + tsIP + ":" + p.Port
+			}
+		}
+		if apiTarget == "" {
+			apiTarget = "http://" + appHost + ":" + p.Port
+		}
 		if p.Port == "" {
 			apiTarget = p.BackendURL
 			if apiTarget == "" {
