@@ -30,6 +30,9 @@ var httpClient = &http.Client{Timeout: 10 * time.Second}
 // Init opens the PostgreSQL connection. dsn accepts postgresql+asyncpg:// prefix.
 func Init(dsn string) error {
 	dsn = strings.Replace(dsn, "postgresql+asyncpg://", "postgres://", 1)
+	if DB != nil {
+		DB.Close() // 旧池关闭——重复 Init 不得累积连接（测试套件 CI 耗尽 100 连接槽）
+	}
 	var err error
 	DB, err = sql.Open("postgres", dsn)
 	if err != nil {
