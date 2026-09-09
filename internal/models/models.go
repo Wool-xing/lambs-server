@@ -102,6 +102,10 @@ type Machine struct {
 	UpdatedAt   string      `json:"updated_at"`
 	LastCheckAt string      `json:"last_check_at"`
 	SSHUser     string      `json:"ssh_user"`
+	// Live metrics (filled from heartbeats/agent — zero when unavailable)
+	CpuPercent float64 `json:"cpu_percent"`
+	MemUsedMB  int     `json:"memory_used_mb"`
+	DiskUsedGB float64 `json:"disk_used_gb"`
 }
 
 // ApiResponse is the standard JSON response envelope.

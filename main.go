@@ -580,6 +580,7 @@ func newMux() *http.ServeMux {
 	mux.HandleFunc("PATCH /api/machines/{id}/status", a(func(w http.ResponseWriter, r *http.Request) { handlers.PatchMachineStatus(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("DELETE /api/machines/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handlers.DeleteMachine(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/machines/reconcile", sa(handlers.ReconcileMachines))
+	mux.HandleFunc("POST /api/machines/heartbeat", auth.CORS(handlers.HandleHeartbeat))
 
 	// Users
 	mux.HandleFunc("GET /api/users", sa(handlers.ListUsers))

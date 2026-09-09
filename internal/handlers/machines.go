@@ -5,12 +5,39 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
 	"lambs-server-go/internal/models"
+	"lambs-server-go/internal/runtime"
 )
+
+// HandleHeartbeat accepts metric pushes from res-monitor on each machine
+// (internal tailnet path, token-gated).
+func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	expect := os.Getenv("MACHINE_HEARTBEAT_TOKEN")
+	if expect == "" || r.Header.Get("Authorization") != "Bearer "+expect {
+		auth.JSONErr(w, 401, "invalid token")
+		return
+	}
+	var body struct {
+		ID         string  `json:"id"`
+		CPU        float64 `json:"cpu_percent"`
+		MemUsedMB  int     `json:"memory_used_mb"`
+		DiskUsedGB float64 `json:"disk_used_gb"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
+		auth.JSONErr(w, 400, "invalid body")
+		return
+	}
+	// hostname 大小写与注册表 id 归一（Lambs 机 hostname 是大写 L）
+	id := strings.ToLower(body.ID)
+	runtime.StoreLive(id, runtime.NodeLive{CPU: body.CPU, MemUsedMB: body.MemUsedMB, DiskUsedGB: body.DiskUsedGB, TS: time.Now().Unix()})
+	auth.JSONOK(w, map[string]string{"id": body.ID})
+}
 
 // ListMachines returns all registered machines from the machines registry.
 func ListMachines(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +63,18 @@ func ListMachines(w http.ResponseWriter, r *http.Request) {
 		}
 		m.Tags = json.RawMessage(tags)
 		m.Override = json.RawMessage(override)
+		// Live metrics: heartbeat for linux machines, agent poll for laptop
+		if live, ok := runtime.SnapshotLive(m.ID); ok {
+			m.CpuPercent = live.CPU
+			m.MemUsedMB = live.MemUsedMB
+			m.DiskUsedGB = live.DiskUsedGB
+		} else if m.ID == "laptop" {
+			if snap := runtime.AgentSnapshot(); snap.Name != "" {
+				m.CpuPercent = snap.CPU
+				m.MemUsedMB = snap.MemUsedMB
+				m.DiskUsedGB = snap.DiskUsedGB
+			}
+		}
 		machines = append(machines, m)
 	}
 	auth.JSONOK(w, map[string]interface{}{"machines": machines, "total": len(machines)})
