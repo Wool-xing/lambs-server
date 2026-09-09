@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/runtime"
 )
 
 // TestMachinesCRUD — real PostgreSQL: upsert (register + update), list,
@@ -177,4 +178,38 @@ func TestReconcileOffline(t *testing.T) {
 		t.Fatalf("expected offline, got %s", status)
 	}
 	db.DB.Exec(`DELETE FROM machines WHERE id='ghost1'`)
+}
+// TestHeartbeat — token gate (401) + accepted push (200) + registry auto-fill.
+func TestHeartbeat(t *testing.T) {
+	oldToken := os.Getenv("MACHINE_HEARTBEAT_TOKEN")
+	os.Setenv("MACHINE_HEARTBEAT_TOKEN", "test-hb-token")
+	defer os.Setenv("MACHINE_HEARTBEAT_TOKEN", oldToken)
+
+	// 401 without token
+	req := httptest.NewRequest(http.MethodPost, "/api/machines/heartbeat", bytes.NewBufferString(`{"id":"hb1"}`))
+	w := httptest.NewRecorder()
+	HandleHeartbeat(w, req)
+	if w.Code != 401 {
+		t.Fatalf("no token = %d, want 401", w.Code)
+	}
+	// 200 with token + live store
+	body := `{"id":"HB-Machine","cpu_percent":5.5,"memory_used_mb":300,"disk_used_gb":2.1,"os":"ubuntu","arch":"amd64","cpu_cores":2,"mem_gb":1,"disk_gb":48}`
+	req = httptest.NewRequest(http.MethodPost, "/api/machines/heartbeat", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer test-hb-token")
+	w = httptest.NewRecorder()
+	HandleHeartbeat(w, req)
+	if w.Code != 200 {
+		t.Fatalf("token push = %d, want 200 body=%s", w.Code, w.Body.String())
+	}
+	if live, ok := runtime.SnapshotLive("hb-machine"); !ok || live.CPU != 5.5 {
+		t.Fatalf("live store = %+v, want cpu 5.5 (id lowercased)", live)
+	}
+	// 400 malformed
+	req = httptest.NewRequest(http.MethodPost, "/api/machines/heartbeat", bytes.NewBufferString(`{bad`))
+	req.Header.Set("Authorization", "Bearer test-hb-token")
+	w = httptest.NewRecorder()
+	HandleHeartbeat(w, req)
+	if w.Code != 400 {
+		t.Fatalf("bad body = %d, want 400", w.Code)
+	}
 }

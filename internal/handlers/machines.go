@@ -42,6 +42,10 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	id := strings.ToLower(body.ID)
 	runtime.StoreLive(id, runtime.NodeLive{CPU: body.CPU, MemUsedMB: body.MemUsedMB, DiskUsedGB: body.DiskUsedGB, TS: time.Now().Unix()})
 	// 静态容量自动补全：注册时只填机器名+IP，装机后心跳补齐（容量列为 0 时才写）
+	if db.DB == nil {
+		auth.JSONOK(w, map[string]string{"id": id})
+		return
+	}
 	if body.OS != "" || body.CpuCores > 0 || body.MemGB > 0 || body.DiskGB > 0 {
 		db.DB.Exec(`UPDATE machines SET os=COALESCE(NULLIF($1,''),os), arch=COALESCE(NULLIF($2,''),arch),
 			cpu_cores=CASE WHEN cpu_cores=0 THEN $3 ELSE cpu_cores END,
