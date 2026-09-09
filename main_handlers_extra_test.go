@@ -24,8 +24,9 @@ func TestSystemHealthNodesAndCPU(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(body.Data.Nodes) != 2 {
-		t.Fatalf("nodes = %d, want 2 (wool + agent)", len(body.Data.Nodes))
+	// 注册表驱动（B5c）：无 DB 时 0；有 DB 时 = machines 行数（当前 4 台）
+	if len(body.Data.Nodes) != 0 && len(body.Data.Nodes) != 4 {
+		t.Fatalf("nodes = %d, want 0 (no db) or 4 (registry)", len(body.Data.Nodes))
 	}
 
 	rr2 := httptest.NewRecorder()

@@ -106,6 +106,9 @@ func StartNodeMonitor() {
 // registry's static capacity with online status (B5c — replaces the old
 // hardcoded two-node list).
 func RegistrySnapshot() []NodeSnapshot {
+	if db.DB == nil {
+		return nil
+	}
 	rows, err := db.DB.Query(`SELECT id, COALESCE(status,'online'), COALESCE(mem_gb,0), COALESCE(disk_gb,0) FROM machines ORDER BY id`)
 	if err != nil {
 		return nil
