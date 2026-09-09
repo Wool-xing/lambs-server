@@ -29,7 +29,10 @@ func lazyDB(t *testing.T) {
 	tdb, _ := sql.Open("postgres", "postgres://u:p@127.0.0.1:1/none")
 	old := db.DB
 	db.DB = tdb
-	t.Cleanup(func() { db.DB = old })
+	t.Cleanup(func() {
+		WaitTaskRuns() // 先等后台任务退出再换回 db 指针（race: executeTask 读 db.DB）
+		db.DB = old
+	})
 }
 
 // TestStartNoServiceConfig — a project row that yields neither
