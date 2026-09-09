@@ -432,7 +432,7 @@ func TestMemberAddRemove(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS users CASCADE`)
-	mustExec(`CREATE TABLE users (id TEXT PRIMARY KEY, project_access JSONB NOT NULL DEFAULT '[]')`)
+	mustExec(`CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT, name TEXT, email TEXT, password_hash TEXT, role TEXT DEFAULT 'viewer', status TEXT DEFAULT 'active', project_access JSONB NOT NULL DEFAULT '[]')`)
 	mustExec(`INSERT INTO users (id, project_access) VALUES ('mem-user','["app2"]')`)
 
 	add := func(uid string, admin bool) *httptest.ResponseRecorder {
