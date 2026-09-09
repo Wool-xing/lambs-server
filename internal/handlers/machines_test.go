@@ -213,3 +213,35 @@ func TestHeartbeat(t *testing.T) {
 		t.Fatalf("bad body = %d, want 400", w.Code)
 	}
 }
+// TestDeleteMachine — 404 for unknown, 200 + row gone for existing.
+func TestDeleteMachine(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	db.DB.Exec(`DROP TABLE IF EXISTS machines`)
+	db.DB.Exec(`CREATE TABLE machines (id TEXT PRIMARY KEY, role TEXT NOT NULL DEFAULT '', ts_ip TEXT, lan_ip TEXT, os TEXT, arch TEXT, cpu_cores INT DEFAULT 0, mem_gb INT DEFAULT 0, disk_gb INT DEFAULT 0, tags JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online', override JSONB NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_check_at TIMESTAMPTZ, ssh_user TEXT NOT NULL DEFAULT '')`)
+	db.DB.Exec(`INSERT INTO machines (id, role, ts_ip) VALUES ('del-m1','gate','100.64.0.9')`)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/machines/nope", nil)
+	w := httptest.NewRecorder()
+	DeleteMachine(w, req, "nope")
+	if w.Code != 200 {
+		t.Fatalf("unknown delete = %d, want 200 (idempotent)", w.Code)
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/machines/del-m1", nil)
+	w = httptest.NewRecorder()
+	DeleteMachine(w, req, "del-m1")
+	if w.Code != 200 {
+		t.Fatalf("delete = %d body=%s", w.Code, w.Body.String())
+	}
+	var cnt int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM machines WHERE id='del-m1'`).Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("row still present after delete")
+	}
+	db.DB.Exec(`DROP TABLE IF EXISTS machines`)
+}

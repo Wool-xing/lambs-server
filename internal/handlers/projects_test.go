@@ -2,8 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"reflect"
 	"testing"
+
+	"lambs-server-go/internal/db"
 )
 
 func TestParseDatasources(t *testing.T) {
@@ -149,5 +154,22 @@ func TestRedactTabs(t *testing.T) {
 	// non-slice input passes through
 	if redactTabs("not-a-slice") != "not-a-slice" {
 		t.Fatal("non-slice input should pass through unchanged")
+	}
+}
+// TestUpdateProjectCode — 404 unknown / 400 local-machine route.
+func TestUpdateProjectCode(t *testing.T) {
+	dsn := os.Getenv("LAMBS_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LAMBS_TEST_PG_DSN not set")
+	}
+	if err := db.Init(dsn); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	// 404: project missing
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/nope/update", nil)
+	w := httptest.NewRecorder()
+	UpdateProjectCode(w, req, "nope")
+	if w.Code != 404 {
+		t.Fatalf("missing = %d, want 404", w.Code)
 	}
 }
