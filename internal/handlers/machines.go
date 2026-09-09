@@ -28,6 +28,11 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		CPU        float64 `json:"cpu_percent"`
 		MemUsedMB  int     `json:"memory_used_mb"`
 		DiskUsedGB float64 `json:"disk_used_gb"`
+		OS         string  `json:"os"`
+		Arch       string  `json:"arch"`
+		CpuCores   int     `json:"cpu_cores"`
+		MemGB      int     `json:"mem_gb"`
+		DiskGB     int     `json:"disk_gb"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
 		auth.JSONErr(w, 400, "invalid body")
@@ -36,7 +41,16 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// hostname 大小写与注册表 id 归一（Lambs 机 hostname 是大写 L）
 	id := strings.ToLower(body.ID)
 	runtime.StoreLive(id, runtime.NodeLive{CPU: body.CPU, MemUsedMB: body.MemUsedMB, DiskUsedGB: body.DiskUsedGB, TS: time.Now().Unix()})
-	auth.JSONOK(w, map[string]string{"id": body.ID})
+	// 静态容量自动补全：注册时只填机器名+IP，装机后心跳补齐（容量列为 0 时才写）
+	if body.OS != "" || body.CpuCores > 0 || body.MemGB > 0 || body.DiskGB > 0 {
+		db.DB.Exec(`UPDATE machines SET os=COALESCE(NULLIF($1,''),os), arch=COALESCE(NULLIF($2,''),arch),
+			cpu_cores=CASE WHEN cpu_cores=0 THEN $3 ELSE cpu_cores END,
+			mem_gb=CASE WHEN mem_gb=0 THEN $4 ELSE mem_gb END,
+			disk_gb=CASE WHEN disk_gb=0 THEN $5 ELSE disk_gb END,
+			status='online', last_check_at=now() WHERE id=$6`,
+			body.OS, body.Arch, body.CpuCores, body.MemGB, body.DiskGB, id)
+	}
+	auth.JSONOK(w, map[string]string{"id": id})
 }
 
 // ListMachines returns all registered machines from the machines registry.
