@@ -23,6 +23,8 @@ func browseSetup(t *testing.T) {
 	if err := db.Init(dsn); err != nil {
 		t.Fatalf("init db: %v", err)
 	}
+	// 共享测试库中其他测试可能 DROP 掉核心表——先确保存在（幂等）
+	db.EnsureCoreSchema()
 	mustExec := func(q string, args ...interface{}) {
 		if _, err := db.DB.Exec(q, args...); err != nil {
 			t.Fatalf("exec %q: %v", q, err)

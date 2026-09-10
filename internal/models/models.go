@@ -31,6 +31,9 @@ type Project struct {
 	UpdatedAt           string      `json:"updated_at"`
 	BackupIntervalHours int         `json:"backup_interval_hours"`
 	BackupRetentionDays int         `json:"backup_retention_days"`
+	Host                string      `json:"host"`
+	GitURL              string      `json:"git_url"`
+	AutoUpdate          bool        `json:"auto_update"`
 }
 
 // User represents a Lambs system user.
@@ -66,6 +69,43 @@ type AuditLog struct {
 	Target    string `json:"target"`
 	Detail    string `json:"detail"`
 	CreatedAt string `json:"created_at"`
+}
+
+// ServiceComponent is one deployable piece of a project (backend, frontend,
+// middleware, job, or windows-svc). Stored inside projects.services JSONB.
+type ServiceComponent struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	GitURL   string `json:"git_url"`
+	StartCmd string `json:"start_cmd"`
+	StopCmd  string `json:"stop_cmd"`
+}
+
+// Machine represents a registered deployment target in the machines registry.
+type Machine struct {
+	ID          string      `json:"id"`
+	Role        string      `json:"role"`
+	TSIP        string      `json:"ts_ip"`
+	LanIP       string      `json:"lan_ip"`
+	OS          string      `json:"os"`
+	Arch        string      `json:"arch"`
+	CPU         int         `json:"cpu_cores"`
+	MemGB       int         `json:"mem_gb"`
+	DiskGB      int         `json:"disk_gb"`
+	Tags        interface{} `json:"tags"`
+	Status      string      `json:"status"`
+	Override    interface{} `json:"override"`
+	Notes       string      `json:"notes"`
+	CreatedAt   string      `json:"created_at"`
+	UpdatedAt   string      `json:"updated_at"`
+	LastCheckAt string      `json:"last_check_at"`
+	SSHUser     string      `json:"ssh_user"`
+	// Live metrics (filled from heartbeats/agent — zero when unavailable)
+	CpuPercent float64 `json:"cpu_percent"`
+	MemUsedMB  int     `json:"memory_used_mb"`
+	DiskUsedGB float64 `json:"disk_used_gb"`
 }
 
 // ApiResponse is the standard JSON response envelope.

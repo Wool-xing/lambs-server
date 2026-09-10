@@ -180,6 +180,13 @@ var (
 )
 
 // StartTaskRun loads a task and runs it immediately (async).
+// taskRunWG lets tests join background task goroutines (race detector:
+// a task spawned in one test must not outlive the shared db pointer).
+var taskRunWG sync.WaitGroup
+
+// WaitTaskRuns blocks until all spawned task runs finish (test helper).
+func WaitTaskRuns() { taskRunWG.Wait() }
+
 func StartTaskRun(id string) error {
 	taskRunMu.Lock()
 	if taskRunning[id] {
@@ -196,7 +203,9 @@ func StartTaskRun(id string) error {
 		taskRunMu.Unlock()
 		return fmt.Errorf("任务不存在")
 	}
+	taskRunWG.Add(1)
 	go func() {
+		defer taskRunWG.Done()
 		defer func() {
 			taskRunMu.Lock()
 			delete(taskRunning, id)

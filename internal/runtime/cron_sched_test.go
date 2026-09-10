@@ -129,6 +129,8 @@ func TestRunWindowsCommandAgentError(t *testing.T) {
 }
 
 func TestRunWindowsCommandUnreachable(t *testing.T) {
+	t.Cleanup(WaitTaskRuns)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	url := srv.URL
 	srv.Close()

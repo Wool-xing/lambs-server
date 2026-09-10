@@ -16,6 +16,7 @@ import (
 
 	"lambs-server-go/internal/auth"
 	"lambs-server-go/internal/db"
+	"lambs-server-go/internal/deploy"
 	"lambs-server-go/internal/execpath"
 	"lambs-server-go/internal/gate"
 	"lambs-server-go/internal/handlers"
@@ -115,7 +116,7 @@ func handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		"disk_used_gb":    float64(int(diskUsed*10)) / 10,
 		"disk_total_gb":   float64(int(diskTotal*10)) / 10,
 		"uptime_seconds":  uptimeSec,
-		"nodes":           []interface{}{runtime.WoolSnapshot(), runtime.AgentSnapshot()},
+		"nodes":           runtime.RegistrySnapshot(),
 	})
 }
 
@@ -461,6 +462,7 @@ func main() {
 	// Background workers
 	go nginx.Sync()
 	go nginx.AutoRefresh()
+	go deploy.StartAutoUpdater()
 	go runtime.ProcMgr.HealthMonitor(func() bool { return lambsConfig.RuntimeEnabled })
 	go runtime.TCPProxyMgr.IdleMonitor()
 	// Scheduled backups: run at startup (catch up missed windows), then every 30 minutes
@@ -556,6 +558,7 @@ func newMux() *http.ServeMux {
 	mux.HandleFunc("PATCH /api/projects/reorder", sa(handlers.ReorderProjects))
 	mux.HandleFunc("POST /api/projects/{id}/test-connection", a(func(w http.ResponseWriter, r *http.Request) { handlers.TestConnection(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/projects/{id}/sync", a(func(w http.ResponseWriter, r *http.Request) { handlers.SyncProject(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("POST /api/projects/{id}/update", sa(func(w http.ResponseWriter, r *http.Request) { handlers.UpdateProjectCode(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/projects/refresh-all", sa(handlers.RefreshAll))
 	mux.HandleFunc("GET /api/projects/{id}/logs", a(func(w http.ResponseWriter, r *http.Request) { handleProjectLogs(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("GET /api/projects/{id}/tables", a(func(w http.ResponseWriter, r *http.Request) { handlers.ProjectTables(w, r, r.PathValue("id")) }))
@@ -570,6 +573,14 @@ func newMux() *http.ServeMux {
 	}))
 	mux.HandleFunc("POST /api/projects/{id}/clone", sa(func(w http.ResponseWriter, r *http.Request) { handlers.CloneProject(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /api/projects/{id}/vector-search", a(func(w http.ResponseWriter, r *http.Request) { handlers.VectorSearch(w, r, r.PathValue("id")) }))
+
+	// Machines registry
+	mux.HandleFunc("GET /api/machines", a(handlers.ListMachines))
+	mux.HandleFunc("POST /api/machines", sa(handlers.UpsertMachine))
+	mux.HandleFunc("PATCH /api/machines/{id}/status", a(func(w http.ResponseWriter, r *http.Request) { handlers.PatchMachineStatus(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("DELETE /api/machines/{id}", sa(func(w http.ResponseWriter, r *http.Request) { handlers.DeleteMachine(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("POST /api/machines/reconcile", sa(handlers.ReconcileMachines))
+	mux.HandleFunc("POST /api/machines/heartbeat", auth.CORS(handlers.HandleHeartbeat))
 
 	// Users
 	mux.HandleFunc("GET /api/users", sa(handlers.ListUsers))

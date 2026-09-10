@@ -60,7 +60,10 @@ jobs:
       # -p 1 serializes packages: they share one test DB and main's E2E
       # drops/recreates the fixture tables.
       - name: Install pg_dump (PG backup test)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+        # dl.google.com chrome 源 Hash mismatch 会中断 update——先摘除该源再装
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
       - name: Test with race detector
         run: go test -p 1 -race -shuffle=on ./...
       - name: Privacy scan
@@ -97,9 +100,10 @@ jobs:
       - name: Per-package coverage floor (candidate 4)
         run: |
           # 单包最低线：有测试的包低于 40% 即红（QA 第 10 轮落账候选 4）。
-          # 无测试文件的包（如 internal/models）不出现在 coverage.out，天然豁免。
+          # Go 1.20+ 的 -cover 会把被 import 的包也写进 coverage.out（cnt=0），
+          # 所以无测试文件的包须用 go list 判定后豁免（否则 0.0% 必挂）。
           python3 - <<'EOF'
-          import collections, sys
+          import collections, subprocess, sys
           tot = collections.defaultdict(int)
           cov = collections.defaultdict(int)
           for line in open('coverage.out'):
@@ -111,12 +115,20 @@ jobs:
               tot[pkg] += int(num)
               if int(cnt) > 0:
                   cov[pkg] += int(num)
+          out = subprocess.run(['go', 'list', '-f', '{{.ImportPath}} {{if .TestGoFiles}}T{{end}}{{if .XTestGoFiles}}T{{end}}', './...'],
+                               capture_output=True, text=True).stdout
+          has_test = {}
+          for ln in out.splitlines():
+              if not ln:
+                  continue
+              imp, flag = ln.split(' ', 1)
+              has_test[imp] = (flag == 'T')
           floor = 50.0
           bad = []
           for pkg in sorted(tot):
               pct = 100 * cov[pkg] / tot[pkg]
               print(f"{pkg}: {pct:.1f}%")
-              if pct < floor:
+              if pct < floor and has_test.get(pkg, True):
                   bad.append(pkg)
           if bad:
               print(f"per-package floor {floor}% violated: {bad}")

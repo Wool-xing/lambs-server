@@ -48,7 +48,7 @@ func TestAggregatedLogsNonSAWithAccess(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`DELETE FROM audit_logs; DELETE FROM users`)
 	mustExec(`INSERT INTO users (id, username, name, email, password_hash, project_access) VALUES (gen_random_uuid(),'viewer1','观众','v1@t.c','x','["acc-proj"]')`)
 	mustExec(`INSERT INTO audit_logs (user_id, user_name, action, target, detail) VALUES ((SELECT id::text FROM users WHERE username='viewer1'),'观众','登录','Lambs','登录成功')`)

@@ -37,7 +37,7 @@ func TestDatasourcesAndAuditLogs(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`CREATE TABLE IF NOT EXISTS audit_logs (id SERIAL PRIMARY KEY, user_id TEXT, action TEXT, target TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`)
 	mustExec(`DELETE FROM projects WHERE id='ds-proj'; DELETE FROM audit_logs;`)
 	mustExec(`INSERT INTO projects (id, name, repo, stack, db_type, dsn, status) VALUES ('ds-proj', '数据源项目', 'ds-repo', 'Go+PG', 'PostgreSQL', 'postgres://x', 'online')`)

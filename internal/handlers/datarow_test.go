@@ -206,7 +206,7 @@ func TestGetProject(t *testing.T) {
 		features JSONB DEFAULT '[]', tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]',
 		services JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT now(),
 		updated_at TIMESTAMPTZ DEFAULT now(),
-		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`)
+		backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0, host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '', auto_update BOOLEAN NOT NULL DEFAULT false)`)
 	mustExec(`INSERT INTO projects (id, name, icon_url) VALUES ('gp-proj','取项目','http://x/icon.png')`)
 
 	get := func(role, userID string) *httptest.ResponseRecorder {
@@ -432,7 +432,7 @@ func TestMemberAddRemove(t *testing.T) {
 		}
 	}
 	mustExec(`DROP TABLE IF EXISTS users CASCADE`)
-	mustExec(`CREATE TABLE users (id TEXT PRIMARY KEY, project_access JSONB NOT NULL DEFAULT '[]')`)
+	mustExec(`CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT, name TEXT, email TEXT, password_hash TEXT, role TEXT DEFAULT 'viewer', status TEXT DEFAULT 'active', project_access JSONB NOT NULL DEFAULT '[]')`)
 	mustExec(`INSERT INTO users (id, project_access) VALUES ('mem-user','["app2"]')`)
 
 	add := func(uid string, admin bool) *httptest.ResponseRecorder {

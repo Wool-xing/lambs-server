@@ -23,7 +23,9 @@ func EnsureCoreSchema() {
 			tags JSONB DEFAULT '[]', offline_msg TEXT, features JSONB DEFAULT '[]',
 			tabs JSONB DEFAULT '[]', datasources JSONB DEFAULT '[]', services JSONB DEFAULT '[]',
 			created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(),
-			backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0)`,
+			backup_interval_hours INT DEFAULT 0, backup_retention_days INT DEFAULT 0,
+			host TEXT NOT NULL DEFAULT '', git_url TEXT NOT NULL DEFAULT '',
+			auto_update BOOLEAN NOT NULL DEFAULT false)`,
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id TEXT PRIMARY KEY, project_id TEXT, type TEXT, title TEXT,
 			content TEXT NOT NULL DEFAULT '', is_read BOOLEAN NOT NULL DEFAULT false,
@@ -31,6 +33,13 @@ func EnsureCoreSchema() {
 		`CREATE TABLE IF NOT EXISTS audit_logs (
 			id SERIAL PRIMARY KEY, user_id TEXT, user_name TEXT, action TEXT,
 			target TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`,
+		`CREATE TABLE IF NOT EXISTS machines (
+			id TEXT PRIMARY KEY, role TEXT NOT NULL DEFAULT '', ts_ip TEXT, lan_ip TEXT,
+			os TEXT, arch TEXT, cpu_cores INT DEFAULT 0, mem_gb INT DEFAULT 0, disk_gb INT DEFAULT 0,
+			tags JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online',
+			override JSONB NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			last_check_at TIMESTAMPTZ, ssh_user TEXT NOT NULL DEFAULT '')`,
 	}
 	for _, s := range stmts {
 		if _, err := DB.Exec(s); err != nil {
