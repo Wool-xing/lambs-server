@@ -289,11 +289,17 @@ func randomHex(n int) string {
 }
 
 // CreateDatabase provisions an isolated database and user for a project on
-// the lambs postgres instance (superuser-capable lambs_admin runs the DDL).
-// Returns the DSN the project should store; the host is lambs' tailscale IP
-// from the machines registry so remote projects can reach it.
+// the data-plane postgres (Sheep). LAMBS_DATA_DSN points at it; falls back
+// to DATABASE_URL (lambs metadata instance) when unset.
+// Returns the DSN the project should store; the host is the data machine's
+// tailscale IP from the machines registry so remote projects can reach it.
 func CreateDatabase(projectID string) (string, error) {
-	raw := os.Getenv("DATABASE_URL")
+	raw := os.Getenv("LAMBS_DATA_DSN")
+	dataHostID := "sheep"
+	if raw == "" {
+		raw = os.Getenv("DATABASE_URL")
+		dataHostID = "lambs"
+	}
 	if raw == "" {
 		return "", fmt.Errorf("DATABASE_URL unset")
 	}
@@ -352,11 +358,11 @@ func CreateDatabase(projectID string) (string, error) {
 	if out, err := cmd3.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("grant schema: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	// Reuse the existing user's password on conflict so repeat runs stay
-	// consistent with what callers already stored.
+	// Host for the returned DSN = the data machine's tailscale IP, so remote
+	// projects reach it cross-machine.
 	var tsIP string
-	if err := db.DB.QueryRow(`SELECT COALESCE(ts_ip,'') FROM machines WHERE id='lambs'`).Scan(&tsIP); err != nil || tsIP == "" {
-		tsIP = "127.0.0.1"
+	if err := db.DB.QueryRow(`SELECT COALESCE(ts_ip,'') FROM machines WHERE id=$1`, dataHostID).Scan(&tsIP); err != nil || tsIP == "" {
+		tsIP = host
 	}
 	dsn := fmt.Sprintf("postgresql://u_%s:%s@%s:%s/app_%s", projectID, password, tsIP, port, projectID)
 	return dsn, nil

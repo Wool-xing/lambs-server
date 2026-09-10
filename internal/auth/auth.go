@@ -276,7 +276,7 @@ func HandleSalt(w http.ResponseWriter, r *http.Request) {
 	if username != "" {
 		db.DB.QueryRow("SELECT COALESCE(pwd_salt,'') FROM users WHERE username=$1", username).Scan(&salt)
 	}
-	JSONOK(w, map[string]string{"salt": salt})
+	JSONOK(w, map[string]interface{}{"salt": salt, "register_enabled": os.Getenv("LAMBS_ALLOW_REGISTER") != "false"})
 }
 
 // HandleRegister creates a viewer account with no project access. A

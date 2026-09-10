@@ -805,8 +805,8 @@ func UpdateProject(w http.ResponseWriter, r *http.Request, id string) {
 			iconThumb = t
 		}
 	}
-	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, icon_thumb=COALESCE(NULLIF($4,''), icon_thumb), stack=$5, port=$6, db_type=$7, dsn=$8, backend_url=$9, service_name=$10, base_path=$11, tags=$12::jsonb, offline_msg=$13, startup_command=$14, health_url=$15, backup_interval_hours=$16, backup_retention_days=$17, datasources=$18::jsonb, services=$19::jsonb WHERE id=$20",
-		p.Name, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, dsJSON, svcJSON, id)
+	_, err := db.DB.Exec("UPDATE projects SET name=$1, description=$2, icon_url=$3, icon_thumb=COALESCE(NULLIF($4,''), icon_thumb), stack=$5, port=$6, db_type=$7, dsn=$8, backend_url=$9, service_name=$10, base_path=$11, tags=$12::jsonb, offline_msg=$13, startup_command=$14, health_url=$15, backup_interval_hours=$16, backup_retention_days=$17, datasources=$18::jsonb, services=$19::jsonb, host=COALESCE(NULLIF($21,''), host), git_url=COALESCE(NULLIF($22,''), git_url), auto_update=$23 WHERE id=$20",
+		p.Name, p.Desc, p.IconURL, iconThumb, p.Stack, p.Port, p.DB, p.DSN, p.BackendURL, p.ServiceName, p.BasePath, string(tagsJSON), p.OfflineMsg, p.StartupCommand, p.HealthURL, p.BackupIntervalHours, p.BackupRetentionDays, dsJSON, svcJSON, id, p.Host, p.GitURL, p.AutoUpdate)
 	if err != nil {
 		log.Printf("UpdateProject %s: %v", id, err)
 		auth.JSONErr(w, 500, "更新项目失败")
