@@ -155,4 +155,8 @@ func TestStartTaskRunConcurrentGuard(t *testing.T) {
 	if err := StartTaskRun("t-guard"); err != nil {
 		t.Errorf("restart after completion should succeed, got: %v", err)
 	}
+	// 第二次 run 异步执行（sleep 3）——必须等它完全退出再返回：后续测试
+	// （procmgr 的 lazyDB）会换掉 db.DB 全局指针，存活的任务 goroutine
+	// 再读它 = race detector 报 DATA RACE（CI 实锤）。
+	WaitTaskRuns()
 }
