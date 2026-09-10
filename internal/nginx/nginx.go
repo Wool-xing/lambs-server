@@ -215,6 +215,7 @@ location = /%s/favicon.svg {
     proxy_pass `+logoURL+`;
     proxy_set_header Host $host;
     add_header Cache-Control "public, max-age=120";
+    include /etc/nginx/snippets/security-headers.conf;
 }
 location = /lambs-gate-%s {
     internal;
